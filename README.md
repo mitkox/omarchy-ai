@@ -60,7 +60,7 @@ Read more about the original Omarchy at [omarchy.org](https://omarchy.org).
 ### Quick Start
 ```bash
 # Download and run the installation script
-curl -fsSL https://raw.githubusercontent.com/mitkox/omarchy-ai/refs/heads/master/boot.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mitkox/omarchy-ai/refs/heads/main/boot.sh | bash
 ```
 
 ### Manual Installation
