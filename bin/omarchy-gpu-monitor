@@ -1,0 +1,200 @@
+#!/bin/bash
+
+# GPU Monitoring Tool for Omarchy AI
+# Provides real-time GPU utilization, memory usage, and temperature monitoring
+
+show_help() {
+    cat << EOF
+GPU Monitor for Omarchy AI
+
+Usage: $(basename "$0") [OPTIONS]
+
+OPTIONS:
+    -h, --help      Show this help message
+    -c, --continuous Monitor continuously (default: single check)
+    -i, --interval   Set update interval in seconds (default: 2)
+    -j, --json      Output in JSON format
+    -t, --temp      Show temperature information
+    --benchmark     Run GPU benchmark test
+
+Examples:
+    $(basename "$0")                    # Single GPU status check
+    $(basename "$0") -c                 # Continuous monitoring
+    $(basename "$0") -c -i 5           # Monitor every 5 seconds
+    $(basename "$0") --benchmark        # Run benchmark test
+EOF
+}
+
+check_gpu() {
+    if ! command -v nvidia-smi &> /dev/null; then
+        echo "Error: nvidia-smi not found. NVIDIA drivers may not be installed."
+        exit 1
+    fi
+}
+
+get_gpu_info() {
+    local format="$1"
+    
+    if [[ "$format" == "json" ]]; then
+        nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit --format=csv,noheader,nounits | \
+        python3 -c "
+import sys, json, csv
+reader = csv.reader(sys.stdin)
+gpus = []
+for i, row in enumerate(reader):
+    gpus.append({
+        'index': int(row[0]),
+        'name': row[1].strip(),
+        'utilization': int(row[2]) if row[2] else 0,
+        'memory_used': int(row[3]) if row[3] else 0,
+        'memory_total': int(row[4]) if row[4] else 0,
+        'temperature': int(row[5]) if row[5] else 0,
+        'power_draw': float(row[6]) if row[6] else 0,
+        'power_limit': float(row[7]) if row[7] else 0
+    })
+print(json.dumps({'gpus': gpus}, indent=2))
+"
+    else
+        echo "=== GPU Status ==="
+        nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader | \
+        while IFS=, read -r index name util mem_used mem_total temp power; do
+            mem_percent=$((mem_used * 100 / mem_total))
+            echo "GPU $index: ${name// /}"
+            echo "  Utilization: ${util// /}%"
+            echo "  Memory: ${mem_used// /}MB / ${mem_total// /}MB (${mem_percent}%)"
+            echo "  Temperature: ${temp// /}°C"
+            echo "  Power: ${power// /}W"
+            echo
+        done
+    fi
+}
+
+monitor_continuous() {
+    local interval="$1"
+    local format="$2"
+    local show_temp="$3"
+    
+    while true; do
+        clear
+        echo "GPU Monitor - $(date)"
+        echo "Press Ctrl+C to exit"
+        echo
+        
+        get_gpu_info "$format"
+        
+        if [[ "$show_temp" == "true" ]]; then
+            echo "=== Thermal Information ==="
+            nvidia-smi --query-gpu=index,temperature.gpu,temperature.memory,fan.speed --format=csv,noheader | \
+            while IFS=, read -r index gpu_temp mem_temp fan_speed; do
+                echo "GPU $index: GPU ${gpu_temp// /}°C, Memory ${mem_temp// /}°C, Fan ${fan_speed// /}%"
+            done
+            echo
+        fi
+        
+        echo "=== Process Information ==="
+        nvidia-smi pmon -c 1 -s u 2>/dev/null | tail -n +3 | head -10
+        
+        sleep "$interval"
+    done
+}
+
+run_benchmark() {
+    echo "Running GPU benchmark..."
+    echo "This will test GPU compute performance with matrix operations."
+    
+    python3 -c "
+import torch
+import time
+import sys
+
+if not torch.cuda.is_available():
+    print('CUDA not available')
+    sys.exit(1)
+
+device = torch.cuda.current_device()
+gpu_name = torch.cuda.get_device_name(device)
+print(f'Testing GPU: {gpu_name}')
+
+# Warm up
+print('Warming up...')
+for _ in range(10):
+    a = torch.randn(1000, 1000, device='cuda')
+    b = torch.randn(1000, 1000, device='cuda')
+    c = torch.matmul(a, b)
+torch.cuda.synchronize()
+
+# Benchmark
+print('Running benchmark...')
+sizes = [1000, 2000, 4000]
+for size in sizes:
+    times = []
+    for _ in range(20):
+        a = torch.randn(size, size, device='cuda')
+        b = torch.randn(size, size, device='cuda')
+        
+        start = time.time()
+        c = torch.matmul(a, b)
+        torch.cuda.synchronize()
+        end = time.time()
+        
+        times.append(end - start)
+    
+    avg_time = sum(times) / len(times)
+    flops = 2 * size**3 / avg_time / 1e12  # TFLOPS
+    print(f'Matrix {size}x{size}: {avg_time:.4f}s ({flops:.2f} TFLOPS)')
+
+print('Benchmark complete!')
+"
+}
+
+# Parse command line arguments
+CONTINUOUS=false
+INTERVAL=2
+FORMAT="text"
+SHOW_TEMP=false
+BENCHMARK=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -c|--continuous)
+            CONTINUOUS=true
+            shift
+            ;;
+        -i|--interval)
+            INTERVAL="$2"
+            shift 2
+            ;;
+        -j|--json)
+            FORMAT="json"
+            shift
+            ;;
+        -t|--temp)
+            SHOW_TEMP=true
+            shift
+            ;;
+        --benchmark)
+            BENCHMARK=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+# Main execution
+check_gpu
+
+if [[ "$BENCHMARK" == "true" ]]; then
+    run_benchmark
+elif [[ "$CONTINUOUS" == "true" ]]; then
+    monitor_continuous "$INTERVAL" "$FORMAT" "$SHOW_TEMP"
+else
+    get_gpu_info "$FORMAT"
+fi

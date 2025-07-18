@@ -1,0 +1,266 @@
+#!/bin/bash
+
+# Enhanced AI Migration System for Omarchy AI
+# This script handles migrations for AI-specific features and configurations
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Configuration
+OMARCHY_AI_HOME="${HOME}/.local/share/omarchy-ai"
+MIGRATIONS_DIR="${OMARCHY_AI_HOME}/migrations"
+MIGRATION_STATE_FILE="${OMARCHY_AI_HOME}/.migration_state"
+
+# Ensure directories exist
+mkdir -p "${MIGRATIONS_DIR}"
+mkdir -p "${OMARCHY_AI_HOME}"
+
+# Function to log messages
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Get the last migration timestamp
+get_last_migration_timestamp() {
+    if [[ -f "${MIGRATION_STATE_FILE}" ]]; then
+        cat "${MIGRATION_STATE_FILE}"
+    else
+        echo "0"
+    fi
+}
+
+# Set the last migration timestamp
+set_last_migration_timestamp() {
+    echo "$1" > "${MIGRATION_STATE_FILE}"
+}
+
+# Create initial AI environment structure
+create_ai_directories() {
+    log_info "Creating AI environment directories..."
+    
+    # Create model storage directories
+    mkdir -p "${HOME}/.local/share/models"
+    mkdir -p "${HOME}/.local/share/models/huggingface"
+    mkdir -p "${HOME}/.local/share/models/gguf"
+    mkdir -p "${HOME}/.local/share/models/custom"
+    
+    # Create configuration directories
+    mkdir -p "${HOME}/.config/omarchy-ai"
+    mkdir -p "${HOME}/.config/model-manager"
+    
+    # Create logs directory
+    mkdir -p "${HOME}/.local/share/omarchy-ai/logs"
+    
+    # Create project templates directory
+    mkdir -p "${HOME}/.local/share/omarchy-ai/templates"
+    
+    log_success "AI environment directories created"
+}
+
+# Initialize model manager configuration
+init_model_manager_config() {
+    log_info "Initializing model manager configuration..."
+    
+    local config_file="${HOME}/.config/model-manager.yaml"
+    
+    if [[ ! -f "${config_file}" ]]; then
+        cat > "${config_file}" << 'EOF'
+# Model Manager Configuration
+storage:
+  backends:
+    - name: "local"
+      type: "filesystem"
+      path: "~/.local/share/models"
+      default: true
+    - name: "cache"
+      type: "filesystem"
+      path: "/tmp/model-cache"
+      temporary: true
+
+huggingface:
+  cache_dir: "~/.cache/huggingface"
+  use_auth_token: false
+  
+download:
+  retry_attempts: 3
+  timeout: 300
+  chunk_size: 8192
+
+git_lfs:
+  enabled: true
+  install_hooks: true
+EOF
+        log_success "Model manager configuration created"
+    else
+        log_info "Model manager configuration already exists"
+    fi
+}
+
+# Create AI development environment activation script
+create_ai_env_script() {
+    log_info "Creating AI environment activation script..."
+    
+    local ai_env_script="${HOME}/.local/bin/ai-env"
+    
+    cat > "${ai_env_script}" << 'EOF'
+#!/bin/bash
+# AI Development Environment Activation Script
+
+# Set environment variables for AI development
+export OMARCHY_AI_HOME="${HOME}/.local/share/omarchy-ai"
+export MODELS_PATH="${HOME}/.local/share/models"
+export HUGGINGFACE_HUB_CACHE="${HOME}/.cache/huggingface"
+export TRANSFORMERS_CACHE="${HOME}/.cache/huggingface/transformers"
+
+# Add AI tools to PATH
+export PATH="${HOME}/.local/share/omarchy-ai/bin:${PATH}"
+
+# CUDA and PyTorch optimizations (if available)
+if command -v nvidia-smi &> /dev/null; then
+    export CUDA_VISIBLE_DEVICES=0
+    export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+fi
+
+# Python environment optimizations
+export PYTHONPATH="${OMARCHY_AI_HOME}/lib:${PYTHONPATH}"
+export TOKENIZERS_PARALLELISM=false
+
+echo "> AI Development Environment Activated"
+echo "Available tools:"
+echo "  - model-download: Download and manage AI models"
+echo "  - omarchy-gpu-monitor: Monitor GPU usage"
+echo "  - omarchy-model-manager: Advanced model management"
+echo ""
+echo "Models directory: ${MODELS_PATH}"
+echo "Configuration: ~/.config/omarchy-ai/"
+EOF
+
+    chmod +x "${ai_env_script}"
+    log_success "AI environment activation script created"
+}
+
+# Run a specific migration
+run_migration() {
+    local migration_file="$1"
+    local migration_name=$(basename "${migration_file}" .sh)
+    
+    log_info "Running migration: ${migration_name}"
+    
+    if [[ -f "${migration_file}" && -x "${migration_file}" ]]; then
+        if bash "${migration_file}"; then
+            log_success "Migration ${migration_name} completed successfully"
+            return 0
+        else
+            log_error "Migration ${migration_name} failed"
+            return 1
+        fi
+    else
+        log_error "Migration file not found or not executable: ${migration_file}"
+        return 1
+    fi
+}
+
+# Run all pending migrations
+run_pending_migrations() {
+    local last_timestamp=$(get_last_migration_timestamp)
+    local migrations_run=0
+    
+    log_info "Checking for pending migrations (last run: ${last_timestamp})"
+    
+    # Find all migration files and sort them
+    if [[ -d "${MIGRATIONS_DIR}" ]]; then
+        for migration_file in "${MIGRATIONS_DIR}"/*.sh; do
+            if [[ -f "${migration_file}" ]]; then
+                local filename=$(basename "${migration_file}")
+                local timestamp="${filename%.sh}"
+                
+                # Check if this migration is newer than the last run
+                if [[ "${timestamp}" -gt "${last_timestamp}" ]]; then
+                    if run_migration "${migration_file}"; then
+                        set_last_migration_timestamp "${timestamp}"
+                        migrations_run=$((migrations_run + 1))
+                    else
+                        log_error "Migration failed, stopping"
+                        return 1
+                    fi
+                fi
+            fi
+        done
+    fi
+    
+    if [[ ${migrations_run} -eq 0 ]]; then
+        log_info "No pending migrations found"
+    else
+        log_success "Completed ${migrations_run} migrations"
+    fi
+}
+
+# Initialize the AI environment
+initialize_ai_environment() {
+    log_info "Initializing Omarchy AI environment..."
+    
+    # Create directory structure
+    create_ai_directories
+    
+    # Initialize configurations
+    init_model_manager_config
+    
+    # Create environment scripts
+    create_ai_env_script
+    
+    # Run any pending migrations
+    run_pending_migrations
+    
+    log_success "Omarchy AI environment initialized successfully"
+}
+
+# Main execution
+main() {
+    case "${1:-init}" in
+        "init")
+            initialize_ai_environment
+            ;;
+        "migrate")
+            run_pending_migrations
+            ;;
+        "reset")
+            log_warning "Resetting migration state..."
+            set_last_migration_timestamp "0"
+            log_success "Migration state reset"
+            ;;
+        "status")
+            local last_timestamp=$(get_last_migration_timestamp)
+            echo "Last migration timestamp: ${last_timestamp}"
+            echo "Migrations directory: ${MIGRATIONS_DIR}"
+            ;;
+        *)
+            echo "Usage: $0 [init|migrate|reset|status]"
+            echo "  init    - Initialize AI environment and run migrations (default)"
+            echo "  migrate - Run pending migrations only"
+            echo "  reset   - Reset migration state"
+            echo "  status  - Show migration status"
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function with all arguments
+main "$@"

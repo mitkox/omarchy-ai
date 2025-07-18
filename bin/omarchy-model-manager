@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""
+Enhanced Model Manager with Git LFS integration and model versioning
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import hashlib
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import yaml
+from datetime import datetime
+import requests
+import git  # GitPython
+from huggingface_hub import hf_hub_download, snapshot_download, HfApi
+from rich.console import Console
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn
+import click
+
+console = Console()
+
+class EnhancedModelManager:
+    def __init__(self, config_path: str = "~/.config/model-manager.yaml"):
+        self.config_path = Path(config_path).expanduser()
+        self.config = self.load_config()
+        self.models_path = Path(self.config["storage"]["backends"][0]["path"])
+        self.registry_path = self.models_path / ".model-registry"
+        
+        # Initialize directories
+        self.models_path.mkdir(parents=True, exist_ok=True)
+        self.registry_path.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize Git repository for model tracking
+        self.init_git_repo()
+    
+    def init_git_repo(self):
+        """Initialize Git repository with LFS for model tracking."""
+        try:
+            # Check if git repo exists
+            repo_path = self.models_path / ".git"
+            if not repo_path.exists():
+                console.print("Initializing Git repository for model tracking...", style="yellow")
+                repo = git.Repo.init(self.models_path)
+                
+                # Configure Git LFS
+                subprocess.run(["git", "lfs", "install"], cwd=self.models_path, check=True)
+                
+                # Create .gitattributes for model files
+                gitattributes_content = """
+*.bin filter=lfs diff=lfs merge=lfs -text
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+*.gguf filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.pth filter=lfs diff=lfs merge=lfs -text
+*.onnx filter=lfs diff=lfs merge=lfs -text
+*.h5 filter=lfs diff=lfs merge=lfs -text
+*.tflite filter=lfs diff=lfs merge=lfs -text
+*.pb filter=lfs diff=lfs merge=lfs -text
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+"""
+                with open(self.models_path / ".gitattributes", "w") as f:
+                    f.write(gitattributes_content.strip())
+                
+                # Create initial commit
+                repo.index.add([".gitattributes"])
+                repo.index.commit("Initial commit: Setup Git LFS for models")
+                
+                console.print("Git repository initialized with LFS support", style="green")
+        except Exception as e:
+            console.print(f"Warning: Could not initialize Git repo: {e}", style="yellow")
+    
+    def load_config(self) -> Dict:
+        """Load configuration from YAML file."""
+        try:
+            with open(self.config_path, 'r') as f:
+                return yaml.safe_load(f)
+        except FileNotFoundError:
+            console.print(f"Config file not found: {self.config_path}", style="red")
+            sys.exit(1)
+    
+    def calculate_file_hash(self, filepath: Path) -> str:
+        """Calculate SHA256 hash of a file."""
+        hash_sha256 = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
+    
+    def save_model_metadata(self, model_id: str, metadata: Dict):
+        """Save model metadata to registry."""
+        registry_file = self.registry_path / f"{model_id.replace('/', '_')}.json"
+        registry_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(registry_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    
+    def get_model_metadata(self, model_id: str) -> Optional[Dict]:
+        """Get model metadata from registry."""
+        registry_file = self.registry_path / f"{model_id.replace('/', '_')}.json"
+        if registry_file.exists():
+            with open(registry_file, 'r') as f:
+                return json.load(f)
+        return None
+    
+    def download_model(self, model_id: str, model_type: str = "huggingface", **kwargs) -> Optional[str]:
+        """Download model with progress tracking."""
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Downloading {model_id}...", total=None)
+            
+            try:
+                if model_type == "huggingface":
+                    return self._download_huggingface_model(model_id, progress, task, **kwargs)
+                elif model_type == "gguf":
+                    return self._download_gguf_model(model_id, progress, task, **kwargs)
+                else:
+                    console.print(f"Unsupported model type: {model_type}", style="red")
+                    return None
+            except Exception as e:
+                progress.remove_task(task)
+                console.print(f"Error downloading model: {e}", style="red")
+                return None
+    
+    def _download_huggingface_model(self, model_id: str, progress, task, revision: str = "main") -> str:
+        """Download model from Hugging Face Hub."""
+        model_path = self.models_path / "huggingface" / model_id
+        
+        # Download model files
+        snapshot_download(
+            repo_id=model_id,
+            revision=revision,
+            local_dir=model_path,
+            local_dir_use_symlinks=False
+        )
+        
+        # Calculate file hashes for integrity
+        file_hashes = {}
+        for file_path in model_path.rglob("*"):
+            if file_path.is_file():
+                rel_path = file_path.relative_to(model_path)
+                file_hashes[str(rel_path)] = self.calculate_file_hash(file_path)
+        
+        # Save metadata
+        metadata = {
+            "model_id": model_id,
+            "source": "huggingface",
+            "revision": revision,
+            "path": str(model_path),
+            "downloaded_at": datetime.now().isoformat(),
+            "file_hashes": file_hashes,
+            "size": self._get_directory_size(model_path)
+        }
+        
+        self.save_model_metadata(model_id, metadata)
+        self._commit_model_changes(model_id, "Downloaded model")
+        
+        progress.remove_task(task)
+        console.print(f"Model downloaded: {model_path}", style="green")
+        return str(model_path)
+    
+    def _download_gguf_model(self, repo_id: str, progress, task, filename: str) -> str:
+        """Download GGUF model file."""
+        model_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir=self.models_path / "gguf" / repo_id,
+            local_dir_use_symlinks=False
+        )
+        
+        file_hash = self.calculate_file_hash(Path(model_path))
+        
+        # Save metadata
+        metadata = {
+            "model_id": f"{repo_id}/{filename}",
+            "source": "huggingface_gguf",
+            "repo_id": repo_id,
+            "filename": filename,
+            "path": model_path,
+            "downloaded_at": datetime.now().isoformat(),
+            "file_hash": file_hash,
+            "size": os.path.getsize(model_path)
+        }
+        
+        self.save_model_metadata(f"{repo_id}/{filename}", metadata)
+        self._commit_model_changes(f"{repo_id}/{filename}", "Downloaded GGUF model")
+        
+        progress.remove_task(task)
+        console.print(f"GGUF model downloaded: {model_path}", style="green")
+        return model_path
+    
+    def _commit_model_changes(self, model_id: str, message: str):
+        """Commit model changes to Git repository."""
+        try:
+            repo = git.Repo(self.models_path)
+            repo.git.add(".")
+            repo.index.commit(f"{message}: {model_id}")
+        except Exception as e:
+            console.print(f"Warning: Could not commit changes: {e}", style="yellow")
+    
+    def list_models(self, show_details: bool = False) -> List[Dict]:
+        """List all downloaded models."""
+        models = []
+        for registry_file in self.registry_path.glob("*.json"):
+            with open(registry_file, 'r') as f:
+                models.append(json.load(f))
+        
+        if show_details:
+            self._display_models_table(models)
+        
+        return models
+    
+    def _display_models_table(self, models: List[Dict]):
+        """Display models in a formatted table."""
+        table = Table(title="Downloaded Models")
+        table.add_column("Model ID", style="cyan", no_wrap=True)
+        table.add_column("Source", style="magenta")
+        table.add_column("Size", style="green")
+        table.add_column("Downloaded", style="yellow")
+        table.add_column("Status", style="blue")
+        
+        for model in models:
+            size = self._format_size(model.get("size", 0))
+            downloaded = model.get("downloaded_at", "Unknown")[:19]
+            
+            # Check if model files still exist
+            model_path = Path(model["path"])
+            status = "✓ Available" if model_path.exists() else "✗ Missing"
+            
+            table.add_row(
+                model["model_id"],
+                model["source"],
+                size,
+                downloaded,
+                status
+            )
+        
+        console.print(table)
+    
+    def verify_model(self, model_id: str) -> bool:
+        """Verify model integrity using stored hashes."""
+        metadata = self.get_model_metadata(model_id)
+        if not metadata:
+            console.print(f"Model {model_id} not found in registry", style="red")
+            return False
+        
+        model_path = Path(metadata["path"])
+        if not model_path.exists():
+            console.print(f"Model path not found: {model_path}", style="red")
+            return False
+        
+        console.print(f"Verifying model: {model_id}")
+        
+        if "file_hashes" in metadata:
+            # Verify multiple files
+            for rel_path, expected_hash in metadata["file_hashes"].items():
+                file_path = model_path / rel_path
+                if file_path.exists():
+                    actual_hash = self.calculate_file_hash(file_path)
+                    if actual_hash != expected_hash:
+                        console.print(f"Hash mismatch for {rel_path}", style="red")
+                        return False
+                else:
+                    console.print(f"Missing file: {rel_path}", style="red")
+                    return False
+        elif "file_hash" in metadata:
+            # Verify single file
+            actual_hash = self.calculate_file_hash(model_path)
+            if actual_hash != metadata["file_hash"]:
+                console.print(f"Hash mismatch for {model_path.name}", style="red")
+                return False
+        
+        console.print(f"Model {model_id} verification successful", style="green")
+        return True
+    
+    def create_model_snapshot(self, model_id: str, tag: str) -> bool:
+        """Create a tagged snapshot of the model."""
+        try:
+            repo = git.Repo(self.models_path)
+            repo.create_tag(f"{model_id.replace('/', '_')}_{tag}")
+            console.print(f"Created snapshot: {tag} for {model_id}", style="green")
+            return True
+        except Exception as e:
+            console.print(f"Error creating snapshot: {e}", style="red")
+            return False
+    
+    def list_model_versions(self, model_id: str) -> List[str]:
+        """List all versions/snapshots of a model."""
+        try:
+            repo = git.Repo(self.models_path)
+            prefix = f"{model_id.replace('/', '_')}_"
+            tags = [tag.name[len(prefix):] for tag in repo.tags if tag.name.startswith(prefix)]
+            return tags
+        except Exception as e:
+            console.print(f"Error listing versions: {e}", style="red")
+            return []
+    
+    def _get_directory_size(self, path: Path) -> int:
+        """Calculate directory size in bytes."""
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                total_size += os.path.getsize(fp)
+        return total_size
+    
+    def _format_size(self, size: int) -> str:
+        """Format size in human readable format."""
+        size_float = float(size)
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_float < 1024.0:
+                return f"{size_float:.1f} {unit}"
+            size_float /= 1024.0
+        return f"{size_float:.1f} PB"
+
+@click.group()
+def cli():
+    """Enhanced AI Model Management CLI"""
+    pass
+
+@cli.command()
+@click.argument('model_id')
+@click.option('--type', 'model_type', default='huggingface', type=click.Choice(['huggingface', 'gguf']))
+@click.option('--revision', default='main', help='Model revision/branch')
+@click.option('--filename', help='Filename for GGUF models')
+def download(model_id, model_type, revision, filename):
+    """Download a model"""
+    manager = EnhancedModelManager()
+    
+    kwargs = {'revision': revision}
+    if model_type == 'gguf' and filename:
+        kwargs['filename'] = filename
+    
+    result = manager.download_model(model_id, model_type, **kwargs)
+    if result:
+        console.print(f"Successfully downloaded: {model_id}", style="green")
+
+@cli.command()
+@click.option('--details', is_flag=True, help='Show detailed information')
+def list_models(details):
+    """List downloaded models"""
+    manager = EnhancedModelManager()
+    manager.list_models(show_details=details)
+
+@cli.command()
+@click.argument('model_id')
+def verify(model_id):
+    """Verify model integrity"""
+    manager = EnhancedModelManager()
+    manager.verify_model(model_id)
+
+@cli.command()
+@click.argument('model_id')
+@click.argument('tag')
+def snapshot(model_id, tag):
+    """Create a model snapshot"""
+    manager = EnhancedModelManager()
+    manager.create_model_snapshot(model_id, tag)
+
+@cli.command()
+@click.argument('model_id')
+def versions(model_id):
+    """List model versions"""
+    manager = EnhancedModelManager()
+    versions = manager.list_model_versions(model_id)
+    if versions:
+        console.print(f"Versions for {model_id}:")
+        for version in versions:
+            console.print(f"  - {version}")
+    else:
+        console.print(f"No versions found for {model_id}")
+
+if __name__ == "__main__":
+    cli()
