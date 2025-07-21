@@ -14,11 +14,21 @@ fi
 # Install base Omarchy system first
 echo -e "\nInstalling base Omarchy system..."
 rm -rf ~/.local/share/omarchy/
-git clone https://github.com/basecamp/omarchy.git ~/.local/share/omarchy >/dev/null 2>&1
+if ! git clone https://github.com/basecamp/omarchy.git ~/.local/share/omarchy >/dev/null 2>&1; then
+  echo "⚠️  Warning: Could not clone base Omarchy repository. Continuing with omarchy-ai only..."
+  echo "   This may affect some theme functionality, but installation can continue."
+  mkdir -p ~/.local/share/omarchy/install
+  # Create a dummy install directory with empty scripts to prevent errors
+  touch ~/.local/share/omarchy/install/dummy.sh
+fi
 
 for f in ~/.local/share/omarchy/install/*.sh; do
-  echo -e "\nRunning base installer: $f"
-  source "$f"
+  if [ -f "$f" ] && [ "$(basename "$f")" != "dummy.sh" ]; then
+    echo -e "\nRunning base installer: $f"
+    if ! source "$f"; then
+      echo "⚠️  Warning: Base installer $f failed, continuing..."
+    fi
+  fi
 done
 
 # Setup environment variables for conda and AI tools
@@ -35,8 +45,12 @@ fi
 # Install AI-specific components
 echo -e "\nInstalling AI development tools..."
 for f in ~/.local/share/omarchy-ai/install/*.sh; do
-  echo -e "\nRunning AI installer: $f"
-  source "$f"
+  if [ -f "$f" ]; then
+    echo -e "\nRunning AI installer: $f"
+    if ! source "$f"; then
+      echo "⚠️  Warning: AI installer $f failed, continuing..."
+    fi
+  fi
 done
 
 # Ensure conda is properly initialized for new shells
@@ -91,16 +105,29 @@ enhanced_features=(
 for feature in "${enhanced_features[@]}"; do
   if [[ -f ~/.local/share/omarchy-ai/install/$feature ]]; then
     echo -e "\nInstalling: $feature"
-    source ~/.local/share/omarchy-ai/install/$feature
+    if ! source ~/.local/share/omarchy-ai/install/$feature; then
+      echo "⚠️  Warning: Enhanced feature $feature failed, continuing..."
+    fi
+  else
+    echo "⚠️  Enhanced feature $feature not found, skipping..."
   fi
 done
 
 # Setup enhanced migration system
 echo -e "\nSetting up migration system..."
-~/.local/share/omarchy-ai/bin/omarchy-enhanced-migrations
+if [ -x ~/.local/share/omarchy-ai/bin/omarchy-enhanced-migrations ]; then
+  ~/.local/share/omarchy-ai/bin/omarchy-enhanced-migrations
+else
+  echo "⚠️  Migration system not found, skipping..."
+fi
 
 # Ensure locate is up to date now that everything has been installed
-sudo updatedb
+if command -v updatedb >/dev/null 2>&1; then
+  echo "📂 Updating file database..."
+  sudo updatedb 2>/dev/null || echo "⚠️  Could not update locate database"
+else
+  echo "⚠️  updatedb not available, skipping locate database update"
+fi
 
 # Final verification and setup
 echo -e "\n🔧 Performing final AI environment verification..."
