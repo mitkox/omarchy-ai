@@ -13,7 +13,10 @@ echo -e "\n$ascii_art\n"
 # Ensure git is available
 if ! command -v git >/dev/null 2>&1; then
     echo "📦 Installing git..."
-    sudo pacman -Sy --noconfirm --needed git
+    if ! sudo pacman -Sy --noconfirm --needed git; then
+        echo "❌ Failed to install git. Please install it manually before continuing."
+        exit 1
+    fi
 fi
 
 echo -e "\n🚀 Cloning Omarchy AI..."
