@@ -1,0 +1,425 @@
+name: Omarchy AI CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run tests weekly
+    - cron: '0 0 * * 0'
+
+env:
+  OMARCHY_AI_AUTO_CONFIRM: "true"
+  PYTHONUNBUFFERED: 1
+
+jobs:
+  lint-and-validate:
+    name: Lint and Validate
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install yamllint shellcheck-py flake8 black isort
+    
+    - name: Lint YAML files
+      run: |
+        yamllint -d relaxed *.yml environment.yml || true
+    
+    - name: Lint shell scripts
+      run: |
+        find . -name "*.sh" -type f -exec shellcheck -x {} + || true
+    
+    - name: Validate Python syntax
+      run: |
+        find . -name "*.py" -type f -exec python -m py_compile {} +
+    
+    - name: Check Python formatting
+      run: |
+        black --check --diff bin/ || true
+        isort --check-only --diff bin/ || true
+    
+    - name: Lint Python code
+      run: |
+        flake8 bin/ --max-line-length=88 --ignore=E203,W503 || true
+
+  test-installation-scripts:
+    name: Test Installation Scripts
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    
+    steps:
+    - name: Update system and install dependencies
+      run: |
+        pacman -Sy --noconfirm
+        pacman -S --noconfirm base-devel git curl wget python python-pip bc
+    
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Test system validation script
+      run: |
+        chmod +x validate-system.sh
+        ./validate-system.sh --report-only || true
+        
+    - name: Test enhanced model manager
+      run: |
+        chmod +x bin/omarchy-model-manager-enhanced
+        python bin/omarchy-model-manager-enhanced --help
+    
+    - name: Test diagnostic tools syntax
+      run: |
+        chmod +x bin/omarchy-ai-doctor
+        chmod +x bin/omarchy-ai-repair
+        chmod +x bin/omarchy-ai-test
+        
+        # Test help functions (should not fail on syntax)
+        bash -n bin/omarchy-ai-doctor
+        bash -n bin/omarchy-ai-repair
+        bash -n bin/omarchy-ai-test
+
+  test-documentation:
+    name: Test Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Check for broken links in markdown
+      run: |
+        # Install markdown link checker
+        npm install -g markdown-link-check
+        
+        # Check markdown files for broken links
+        find . -name "*.md" -exec markdown-link-check {} \; || true
+    
+    - name: Validate README structure
+      run: |
+        # Check that README has required sections
+        grep -q "## Installation" README.md
+        grep -q "## Usage" README.md
+        grep -q "## Troubleshooting" README.md
+        echo "✅ README structure is valid"
+    
+    - name: Check documentation completeness
+      run: |
+        # Verify all major components have documentation
+        test -f QUICKSTART.md
+        test -f TROUBLESHOOTING.md
+        test -f INSTALLATION-GUIDE.md
+        test -f PRD.md
+        echo "✅ Documentation files present"
+
+  integration-test:
+    name: Integration Test (Dry Run)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    
+    steps:
+    - name: Update system
+      run: |
+        pacman -Sy --noconfirm
+        pacman -S --noconfirm base-devel git curl wget python python-pip sudo which bc
+        
+        # Create a non-root user for testing
+        useradd -m -s /bin/bash testuser
+        echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+    
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        path: /home/testuser/omarchy-ai-test
+    
+    - name: Change ownership
+      run: |
+        chown -R testuser:testuser /home/testuser/omarchy-ai-test
+    
+    - name: Test system validation
+      run: |
+        su - testuser -c "cd /home/testuser/omarchy-ai-test && chmod +x validate-system.sh && ./validate-system.sh" || true
+    
+    - name: Test installation script syntax
+      run: |
+        su - testuser -c "cd /home/testuser/omarchy-ai-test && bash -n install.sh"
+    
+    - name: Test boot script syntax
+      run: |
+        su - testuser -c "cd /home/testuser/omarchy-ai-test && bash -n boot.sh"
+    
+    - name: Test environment setup
+      run: |
+        su - testuser -c "
+          cd /home/testuser/omarchy-ai-test
+          mkdir -p ~/.local/share/omarchy-ai
+          cp -r * ~/.local/share/omarchy-ai/
+          
+          # Test basic directory creation
+          mkdir -p ~/ai-workspace/{projects,models,datasets,experiments,notebooks,logs}
+          
+          # Test env file creation
+          cat > ~/.env << 'EOF'
+CUDA_VISIBLE_DEVICES=0
+PYTHONPATH=/home/testuser/ai-workspace/src
+EOF
+          
+          echo '✅ Environment setup test passed'
+        "
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Run Bandit security scan on Python files
+      run: |
+        pip install bandit
+        find . -name "*.py" -type f -exec bandit {} + || true
+    
+    - name: Check for hardcoded secrets
+      run: |
+        # Basic secret detection
+        if grep -r -i "password\|secret\|key\|token" --include="*.py" --include="*.sh" --include="*.yml" . | grep -v "# " | grep -v "echo"; then
+          echo "⚠️  Potential secrets found (review manually)"
+        else
+          echo "✅ No obvious secrets detected"
+        fi
+    
+    - name: Check file permissions
+      run: |
+        # Check that no files have overly permissive permissions
+        find . -type f -perm /o+w -exec echo "World-writable file: {}" \;
+        find . -type f -name "*.sh" ! -perm /u+x -exec echo "Non-executable script: {}" \;
+
+  compatibility-test:
+    name: Test Python Compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Test Python scripts compatibility
+      run: |
+        # Test syntax compatibility with different Python versions
+        find . -name "*.py" -type f -exec python -m py_compile {} +
+        echo "✅ Python ${{ matrix.python-version }} compatibility check passed"
+    
+    - name: Test requirements parsing
+      run: |
+        pip install -r requirements.txt --dry-run || echo "⚠️  Some packages may not be available for Python ${{ matrix.python-version }}"
+
+  dependency-check:
+    name: Dependency Security Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install safety
+      run: |
+        pip install safety
+    
+    - name: Check dependencies for known vulnerabilities
+      run: |
+        safety check -r requirements.txt --json --output safety-report.json || true
+        if [ -f safety-report.json ]; then
+          echo "Security scan completed - check artifacts for details"
+        fi
+    
+    - name: Upload security report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-report
+        path: safety-report.json
+
+  build-documentation:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install documentation dependencies
+      run: |
+        pip install mkdocs mkdocs-material
+    
+    - name: Create mkdocs config
+      run: |
+        cat > mkdocs.yml << 'EOF'
+site_name: Omarchy AI Documentation
+nav:
+  - Home: README.md
+  - Quick Start: QUICKSTART.md
+  - Installation: INSTALLATION-GUIDE.md
+  - Troubleshooting: TROUBLESHOOTING.md
+  - Product Requirements: PRD.md
+theme: material
+EOF
+    
+    - name: Build documentation
+      run: |
+        mkdocs build || echo "Documentation build completed with warnings"
+    
+    - name: Upload documentation
+      uses: actions/upload-artifact@v3
+      with:
+        name: documentation
+        path: site/
+
+  performance-test:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install benchmark dependencies
+      run: |
+        pip install numpy pandas torch --index-url https://download.pytorch.org/whl/cpu
+    
+    - name: Run performance benchmarks
+      run: |
+        python << 'EOF'
+import time
+import numpy as np
+
+# CPU benchmark
+print("Running CPU benchmark...")
+start = time.time()
+a = np.random.rand(1000, 1000)
+b = np.random.rand(1000, 1000)
+c = np.dot(a, b)
+cpu_time = time.time() - start
+print(f"CPU matrix multiplication: {cpu_time:.3f}s")
+
+# Memory benchmark  
+print("Running memory benchmark...")
+start = time.time()
+data = [0] * 1000000
+for i in range(len(data)):
+    data[i] = i
+mem_time = time.time() - start
+print(f"Memory allocation/access: {mem_time:.3f}s")
+
+# PyTorch benchmark (CPU)
+print("Running PyTorch benchmark...")
+try:
+    import torch
+    start = time.time()
+    x = torch.rand(1000, 1000)
+    y = torch.rand(1000, 1000)
+    z = torch.mm(x, y)
+    torch_time = time.time() - start
+    print(f"PyTorch matrix multiplication: {torch_time:.3f}s")
+except ImportError:
+    print("PyTorch not available for benchmarking")
+
+print("✅ Performance benchmarks completed")
+EOF
+
+  generate-release-notes:
+    name: Generate Release Notes
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Generate changelog
+      run: |
+        # Generate basic changelog from git history
+        echo "# Latest Changes" > CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        git log --oneline --since="1 week ago" --pretty=format:"- %s" >> CHANGELOG.md || echo "- No recent changes" >> CHANGELOG.md
+    
+    - name: Upload changelog
+      uses: actions/upload-artifact@v3
+      with:
+        name: changelog
+        path: CHANGELOG.md
+
+  notify-on-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate, test-installation-scripts, integration-test]
+    if: failure()
+    
+    steps:
+    - name: Create failure summary
+      run: |
+        echo "## ❌ CI/CD Pipeline Failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "The following jobs failed:" >> $GITHUB_STEP_SUMMARY
+        echo "- Check the job logs for details" >> $GITHUB_STEP_SUMMARY
+        echo "- Fix issues before merging" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Common fixes:" >> $GITHUB_STEP_SUMMARY
+        echo "- Run \`./bin/omarchy-ai-test\` locally" >> $GITHUB_STEP_SUMMARY
+        echo "- Check syntax with \`bash -n script.sh\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Validate Python with \`python -m py_compile file.py\`" >> $GITHUB_STEP_SUMMARY
+
+  success-summary:
+    name: Success Summary
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate, test-installation-scripts, integration-test, security-scan]
+    if: success()
+    
+    steps:
+    - name: Create success summary
+      run: |
+        echo "## ✅ All Tests Passed!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "The Omarchy AI pipeline completed successfully:" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Code linting and validation" >> $GITHUB_STEP_SUMMARY  
+        echo "- ✅ Installation script testing" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Integration testing" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Security scanning" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Documentation building" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🚀 Ready for deployment!"

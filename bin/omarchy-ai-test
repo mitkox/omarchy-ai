@@ -1,0 +1,806 @@
+#!/bin/bash
+# Omarchy AI Test Suite - Comprehensive installation and functionality testing
+
+set -euo pipefail
+
+# Configuration
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly TEST_LOG="$HOME/.omarchy-ai-tests.log"
+readonly TEST_RESULTS="$HOME/.omarchy-ai-test-results.json"
+
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+# Test counters
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+TESTS_SKIPPED=0
+
+# Test results array
+declare -a TEST_RESULTS_ARRAY=()
+
+# Logging functions
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$TEST_LOG"
+}
+
+error() {
+    log "${RED}❌ $*${NC}"
+}
+
+warning() {
+    log "${YELLOW}⚠️  $*${NC}"
+}
+
+success() {
+    log "${GREEN}✅ $*${NC}"
+}
+
+info() {
+    log "${BLUE}ℹ️  $*${NC}"
+}
+
+# Test result recording
+record_test_result() {
+    local test_name="$1"
+    local status="$2"
+    local message="$3"
+    local duration="$4"
+    
+    local result="{
+        \"test_name\": \"$test_name\",
+        \"status\": \"$status\",
+        \"message\": \"$message\",
+        \"duration\": $duration,
+        \"timestamp\": \"$(date -Iseconds)\"
+    }"
+    
+    TEST_RESULTS_ARRAY+=("$result")
+}
+
+# Test execution wrapper
+run_test() {
+    local test_name="$1"
+    local test_function="$2"
+    local skip_reason="$3"
+    
+    info "Running test: $test_name"
+    ((TESTS_RUN++))
+    
+    if [[ -n "$skip_reason" ]]; then
+        warning "Test skipped: $skip_reason"
+        ((TESTS_SKIPPED++))
+        record_test_result "$test_name" "SKIPPED" "$skip_reason" 0
+        return 0
+    fi
+    
+    local start_time
+    start_time=$(date +%s.%N)
+    
+    if $test_function; then
+        local end_time
+        end_time=$(date +%s.%N)
+        local duration
+        duration=$(echo "$end_time - $start_time" | bc -l)
+        
+        success "Test passed: $test_name (${duration}s)"
+        ((TESTS_PASSED++))
+        record_test_result "$test_name" "PASSED" "Test completed successfully" "$duration"
+        return 0
+    else
+        local end_time
+        end_time=$(date +%s.%N)
+        local duration
+        duration=$(echo "$end_time - $start_time" | bc -l)
+        
+        error "Test failed: $test_name (${duration}s)"
+        ((TESTS_FAILED++))
+        record_test_result "$test_name" "FAILED" "Test execution failed" "$duration"
+        return 1
+    fi
+}
+
+# Individual test functions
+test_system_requirements() {
+    # Check RAM
+    local total_ram_gb
+    total_ram_gb=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024))
+    [[ $total_ram_gb -ge 16 ]] || {
+        error "Insufficient RAM: ${total_ram_gb}GB (minimum 16GB)"
+        return 1
+    }
+    
+    # Check disk space
+    local available_space_gb
+    available_space_gb=$(($(df / | tail -1 | awk '{print $4}') / 1024 / 1024))
+    [[ $available_space_gb -ge 50 ]] || {
+        error "Insufficient disk space: ${available_space_gb}GB (minimum 50GB)"
+        return 1
+    }
+    
+    return 0
+}
+
+test_arch_linux_detection() {
+    [[ -f /etc/arch-release ]] || {
+        error "Not running on Arch Linux"
+        return 1
+    }
+    return 0
+}
+
+test_required_packages() {
+    local packages=(
+        "git"
+        "curl"
+        "wget"
+        "python"
+        "python-pip"
+    )
+    
+    for package in "${packages[@]}"; do
+        if ! pacman -Qi "$package" >/dev/null 2>&1; then
+            error "Required package missing: $package"
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
+test_yay_installation() {
+    if ! command -v yay >/dev/null 2>&1; then
+        error "yay (AUR helper) not available"
+        return 1
+    fi
+    
+    # Test yay functionality
+    if ! yay --version >/dev/null 2>&1; then
+        error "yay not functional"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_conda_installation() {
+    if ! command -v conda >/dev/null 2>&1; then
+        error "Conda not available"
+        return 1
+    fi
+    
+    # Test conda functionality
+    if ! conda --version >/dev/null 2>&1; then
+        error "Conda not functional"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_ai_environment_exists() {
+    if ! command -v conda >/dev/null 2>&1; then
+        error "Conda not available"
+        return 1
+    fi
+    
+    if ! conda info --envs 2>/dev/null | grep -q "ai-dev"; then
+        error "ai-dev environment not found"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_ai_environment_activation() {
+    if ! command -v conda >/dev/null 2>&1; then
+        error "Conda not available"
+        return 1
+    fi
+    
+    if ! conda run -n ai-dev python --version >/dev/null 2>&1; then
+        error "Cannot activate ai-dev environment"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_python_packages() {
+    local critical_packages=(
+        "torch"
+        "transformers"
+        "numpy" 
+        "pandas"
+        "matplotlib"
+        "jupyter"
+        "fastapi"
+    )
+    
+    for package in "${critical_packages[@]}"; do
+        if ! conda run -n ai-dev python -c "import $package" >/dev/null 2>&1; then
+            error "Python package missing or broken: $package"
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
+test_gpu_detection() {
+    # This test passes if no GPU is present (not required)
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        warning "No NVIDIA GPU detected (optional)"
+        return 0
+    fi
+    
+    # If nvidia-smi exists, it should work
+    if ! nvidia-smi >/dev/null 2>&1; then
+        error "nvidia-smi not functional"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_cuda_support() {
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        # Skip if no GPU
+        return 0
+    fi
+    
+    # Test PyTorch CUDA support
+    local cuda_available
+    cuda_available=$(conda run -n ai-dev python -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "error")
+    
+    if [[ "$cuda_available" == "True" ]]; then
+        return 0
+    elif [[ "$cuda_available" == "False" ]]; then
+        warning "GPU detected but PyTorch CUDA not available"
+        return 0  # Not a failure, just suboptimal
+    else
+        error "Cannot test CUDA support"
+        return 1
+    fi
+}
+
+test_ai_workspace() {
+    local workspace_dir="$HOME/ai-workspace"
+    
+    if [[ ! -d "$workspace_dir" ]]; then
+        error "AI workspace directory not found"
+        return 1
+    fi
+    
+    local required_dirs=(
+        "projects"
+        "models"
+        "datasets"
+        "experiments"
+        "notebooks"
+        "logs"
+    )
+    
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$workspace_dir/$dir" ]]; then
+            error "Required workspace directory missing: $dir"
+            return 1
+        fi
+    done
+    
+    # Check .env file
+    if [[ ! -f "$workspace_dir/.env" ]]; then
+        error "AI workspace .env file missing"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_shell_aliases() {
+    # Source bashrc to get aliases
+    if [[ -f ~/.bashrc ]]; then
+        # shellcheck source=/dev/null
+        source ~/.bashrc
+    fi
+    
+    local required_aliases=(
+        "ai-workspace"
+        "jupyter-ai"
+    )
+    
+    for alias_name in "${required_aliases[@]}"; do
+        if ! alias "$alias_name" >/dev/null 2>&1; then
+            error "Required alias missing: $alias_name"
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
+test_jupyter_functionality() {
+    if ! conda run -n ai-dev jupyter --version >/dev/null 2>&1; then
+        error "Jupyter not available in ai-dev environment"
+        return 1
+    fi
+    
+    # Test JupyterLab
+    if ! conda run -n ai-dev jupyter lab --version >/dev/null 2>&1; then
+        error "JupyterLab not available"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_model_management() {
+    local model_manager_paths=(
+        "$HOME/.local/share/omarchy-ai/bin/omarchy-model-manager"
+        "$HOME/ai-workspace/tools/model-manager.py"
+    )
+    
+    local found=false
+    for path in "${model_manager_paths[@]}"; do
+        if [[ -x "$path" ]]; then
+            found=true
+            break
+        fi
+    done
+    
+    if [[ "$found" == false ]]; then
+        error "Model manager not found or not executable"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_docker_availability() {
+    if ! command -v docker >/dev/null 2>&1; then
+        warning "Docker not available (optional feature)"
+        return 0
+    fi
+    
+    # Test docker functionality (may require permissions)
+    if ! docker --version >/dev/null 2>&1; then
+        error "Docker not functional"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_network_connectivity() {
+    local test_urls=(
+        "github.com"
+        "pypi.org"
+        "huggingface.co"
+    )
+    
+    local failures=0
+    for url in "${test_urls[@]}"; do
+        if ! curl -s --connect-timeout 5 "$url" >/dev/null 2>&1; then
+            warning "Cannot connect to $url"
+            ((failures++))
+        fi
+    done
+    
+    # Allow some network failures
+    if [[ $failures -eq ${#test_urls[@]} ]]; then
+        error "No network connectivity"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_performance_basic() {
+    # Basic CPU test
+    local cpu_test_result
+    cpu_test_result=$(conda run -n ai-dev python -c "
+import time
+import numpy as np
+
+start = time.time()
+a = np.random.rand(1000, 1000)
+b = np.random.rand(1000, 1000)
+c = np.dot(a, b)
+end = time.time()
+print(end - start)
+" 2>/dev/null || echo "999")
+    
+    # Should complete in reasonable time
+    if (( $(echo "$cpu_test_result > 30" | bc -l) )); then
+        error "CPU performance test took too long: ${cpu_test_result}s"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_gpu_performance() {
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        # Skip if no GPU
+        return 0
+    fi
+    
+    # Test GPU computation
+    local gpu_test_result
+    gpu_test_result=$(conda run -n ai-dev python -c "
+import time
+import torch
+
+if torch.cuda.is_available():
+    device = torch.device('cuda')
+    start = time.time()
+    a = torch.rand(1000, 1000, device=device)
+    b = torch.rand(1000, 1000, device=device)
+    c = torch.mm(a, b)
+    torch.cuda.synchronize()
+    end = time.time()
+    print(end - start)
+else:
+    print('no-cuda')
+" 2>/dev/null || echo "error")
+    
+    if [[ "$gpu_test_result" == "no-cuda" ]]; then
+        warning "CUDA not available for GPU test"
+        return 0
+    elif [[ "$gpu_test_result" == "error" ]]; then
+        error "GPU performance test failed"
+        return 1
+    elif (( $(echo "$gpu_test_result > 10" | bc -l) )); then
+        error "GPU performance test took too long: ${gpu_test_result}s"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_llama_cpp_installation() {
+    if ! command -v llama-cpp-server >/dev/null 2>&1; then
+        warning "llama-cpp-server not available (optional)"
+        return 0
+    fi
+    
+    # Test if llama-cpp-server can show help
+    if ! llama-cpp-server --help >/dev/null 2>&1; then
+        error "llama-cpp-server not functional"
+        return 1
+    fi
+    
+    return 0
+}
+
+test_diagnostic_tools() {
+    local diagnostic_tools=(
+        "$HOME/.local/share/omarchy-ai/bin/omarchy-ai-doctor"
+        "$HOME/.local/share/omarchy-ai/bin/omarchy-ai-repair"
+    )
+    
+    for tool in "${diagnostic_tools[@]}"; do
+        if [[ ! -x "$tool" ]]; then
+            error "Diagnostic tool missing or not executable: $(basename "$tool")"
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
+# Integration tests
+test_model_download_simulation() {
+    # Test model download without actually downloading
+    if [[ ! -d ~/ai-workspace/models ]]; then
+        error "Models directory not found"
+        return 1
+    fi
+    
+    # Create a small test file to simulate model download
+    local test_model_dir="~/ai-workspace/models/test-model"
+    mkdir -p "$test_model_dir"
+    echo "test model" > "$test_model_dir/test.txt"
+    
+    if [[ ! -f "$test_model_dir/test.txt" ]]; then
+        error "Cannot create test files in models directory"
+        return 1
+    fi
+    
+    # Clean up
+    rm -rf "$test_model_dir"
+    return 0
+}
+
+test_jupyter_notebook_creation() {
+    local test_notebook="~/ai-workspace/notebooks/test_notebook.ipynb"
+    
+    # Create a simple test notebook
+    cat > "$test_notebook" << 'EOF'
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import numpy as np\n",
+    "print('Test notebook works!')"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
+EOF
+    
+    if [[ ! -f "$test_notebook" ]]; then
+        error "Cannot create test notebook"
+        return 1
+    fi
+    
+    # Test notebook execution
+    if ! conda run -n ai-dev jupyter nbconvert --to python --execute "$test_notebook" >/dev/null 2>&1; then
+        warning "Cannot execute test notebook (may need kernel setup)"
+        # Don't fail the test for this
+    fi
+    
+    # Clean up
+    rm -f "$test_notebook"
+    rm -f "${test_notebook%.ipynb}.py"
+    
+    return 0
+}
+
+# Generate test report
+generate_test_report() {
+    info "Generating test report..."
+    
+    # Create JSON report
+    {
+        echo "{"
+        echo "  \"test_run\": {"
+        echo "    \"timestamp\": \"$(date -Iseconds)\","
+        echo "    \"total_tests\": $TESTS_RUN,"
+        echo "    \"passed\": $TESTS_PASSED,"
+        echo "    \"failed\": $TESTS_FAILED,"
+        echo "    \"skipped\": $TESTS_SKIPPED,"
+        echo "    \"success_rate\": $(echo "scale=2; $TESTS_PASSED * 100 / $TESTS_RUN" | bc -l)%"
+        echo "  },"
+        echo "  \"test_results\": ["
+        
+        local first=true
+        for result in "${TEST_RESULTS_ARRAY[@]}"; do
+            if [[ "$first" == true ]]; then
+                first=false
+            else
+                echo ","
+            fi
+            echo "    $result"
+        done
+        
+        echo "  ]"
+        echo "}"
+    } > "$TEST_RESULTS"
+    
+    # Create human-readable report
+    local human_report="$HOME/.omarchy-ai-test-summary.txt"
+    {
+        echo "Omarchy AI Test Report"
+        echo "====================="
+        echo "Generated: $(date)"
+        echo ""
+        echo "Test Summary:"
+        echo "- Total tests: $TESTS_RUN"
+        echo "- Passed: $TESTS_PASSED"
+        echo "- Failed: $TESTS_FAILED"
+        echo "- Skipped: $TESTS_SKIPPED"
+        echo "- Success rate: $(echo "scale=1; $TESTS_PASSED * 100 / $TESTS_RUN" | bc -l)%"
+        echo ""
+        
+        if [[ $TESTS_FAILED -eq 0 ]]; then
+            echo "🎉 All tests passed! Your Omarchy AI installation is working correctly."
+        else
+            echo "⚠️  Some tests failed. Check the detailed log for more information."
+            echo ""
+            echo "Failed tests:"
+            for result in "${TEST_RESULTS_ARRAY[@]}"; do
+                if echo "$result" | grep -q '"status": "FAILED"'; then
+                    local test_name
+                    test_name=$(echo "$result" | grep -o '"test_name": "[^"]*"' | cut -d'"' -f4)
+                    echo "  - $test_name"
+                fi
+            done
+        fi
+        
+        echo ""
+        echo "For detailed results: $TEST_RESULTS"
+        echo "For full logs: $TEST_LOG"
+        
+    } > "$human_report"
+    
+    success "Test report generated: $human_report"
+    success "Detailed results: $TEST_RESULTS"
+}
+
+# Main test runner
+run_all_tests() {
+    info "Starting Omarchy AI test suite..."
+    info "Test log: $TEST_LOG"
+    
+    # Initialize log
+    echo "Omarchy AI Test Suite - $(date)" > "$TEST_LOG"
+    
+    # Reset counters
+    TESTS_RUN=0
+    TESTS_PASSED=0
+    TESTS_FAILED=0
+    TESTS_SKIPPED=0
+    TEST_RESULTS_ARRAY=()
+    
+    # Define test suite
+    local tests=(
+        "test_arch_linux_detection||"
+        "test_system_requirements||"
+        "test_required_packages||"
+        "test_yay_installation||"
+        "test_conda_installation||"
+        "test_ai_environment_exists||"
+        "test_ai_environment_activation||"
+        "test_python_packages||"
+        "test_ai_workspace||"
+        "test_shell_aliases||"
+        "test_jupyter_functionality||"
+        "test_model_management||"
+        "test_diagnostic_tools||"
+        "test_gpu_detection||"
+        "test_cuda_support||"
+        "test_docker_availability||"
+        "test_network_connectivity||"
+        "test_llama_cpp_installation||"
+        "test_performance_basic||"
+        "test_gpu_performance||"
+        "test_model_download_simulation||"
+        "test_jupyter_notebook_creation||"
+    )
+    
+    # Run tests
+    for test_spec in "${tests[@]}"; do
+        IFS='|' read -r test_function skip_reason <<< "$test_spec"
+        
+        echo ""
+        run_test "$test_function" "$test_function" "$skip_reason"
+    done
+    
+    # Generate report
+    echo ""
+    generate_test_report
+    
+    # Show summary
+    echo ""
+    echo "================================"
+    info "Test suite completed"
+    echo ""
+    
+    if [[ $TESTS_FAILED -eq 0 ]]; then
+        success "🎉 All tests passed! ($TESTS_PASSED/$TESTS_RUN)"
+        success "Your Omarchy AI installation is working correctly."
+    else
+        warning "⚠️  Some tests failed ($TESTS_FAILED/$TESTS_RUN failed)"
+        echo "Common solutions:"
+        echo "1. Run 'omarchy-ai-repair' to fix common issues"
+        echo "2. Check the detailed log: $TEST_LOG"
+        echo "3. Re-run installation if issues persist"
+    fi
+    
+    if [[ $TESTS_SKIPPED -gt 0 ]]; then
+        info "ℹ️  Some tests were skipped ($TESTS_SKIPPED/$TESTS_RUN)"
+        info "This is normal for optional features"
+    fi
+    
+    echo ""
+    echo "📊 Full report: cat ~/.omarchy-ai-test-summary.txt"
+    
+    return $TESTS_FAILED
+}
+
+# Quick health check (subset of tests)
+run_quick_check() {
+    info "Running quick health check..."
+    
+    local quick_tests=(
+        "test_conda_installation"
+        "test_ai_environment_exists"
+        "test_python_packages"
+        "test_ai_workspace"
+    )
+    
+    local quick_failures=0
+    
+    for test_func in "${quick_tests[@]}"; do
+        if ! $test_func >/dev/null 2>&1; then
+            error "Quick check failed: $test_func"
+            ((quick_failures++))
+        else
+            success "Quick check passed: $test_func"
+        fi
+    done
+    
+    if [[ $quick_failures -eq 0 ]]; then
+        success "✅ Quick health check passed"
+        return 0
+    else
+        error "❌ Quick health check failed ($quick_failures failures)"
+        return 1
+    fi
+}
+
+# Show help
+show_help() {
+    cat << EOF
+Omarchy AI Test Suite - Comprehensive Installation Testing
+
+USAGE:
+    $0 [OPTIONS]
+
+OPTIONS:
+    --help          Show this help message
+    --quick         Run quick health check only
+    --performance   Include performance benchmarks
+    --gpu           Run GPU-specific tests only
+    --no-network    Skip network connectivity tests
+
+EXAMPLES:
+    $0              # Run full test suite
+    $0 --quick      # Quick health check
+    $0 --gpu        # GPU tests only
+
+FILES:
+    ~/.omarchy-ai-tests.log           # Detailed test log
+    ~/.omarchy-ai-test-results.json   # Machine-readable results
+    ~/.omarchy-ai-test-summary.txt    # Human-readable summary
+
+This test suite validates your Omarchy AI installation and identifies
+any issues that need attention.
+
+EOF
+}
+
+# Parse command line arguments
+case "${1:-}" in
+    --help|-h)
+        show_help
+        exit 0
+        ;;
+    --quick)
+        run_quick_check
+        ;;
+    --performance)
+        echo "Performance-only testing not implemented yet"
+        exit 1
+        ;;
+    --gpu)
+        echo "GPU-only testing not implemented yet"
+        exit 1
+        ;;
+    --no-network)
+        echo "Selective test exclusion not implemented yet"
+        exit 1
+        ;;
+    *)
+        run_all_tests
+        ;;
+esac

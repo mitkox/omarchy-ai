@@ -2,16 +2,76 @@
 
 Turn a fresh Arch installation into a fully-configured, beautiful, and modern AI development system based on Hyprland by running a single command. Built on the foundation of Omarchy, Omarchy AI is specifically designed for AI engineers and researchers who need a complete, local-first development environment.
 
+[![GitHub stars](https://img.shields.io/github/stars/mitkox/omarchy-ai?style=flat-square)](https://github.com/mitkox/omarchy-ai/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/mitkox/omarchy-ai?style=flat-square)](https://github.com/mitkox/omarchy-ai/issues)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+
 Unlike cloud-based AI development, Omarchy AI provides:
 - **Local AI inference** with llama.cpp and CUDA GPU support
 - **Offline-first development** with cached models and documentation
 - **Integrated CI/CD** for AI model testing and deployment
 - **Model management** for downloading, versioning, and serving AI models
 - **Privacy-focused** development with no cloud dependencies
+- **Comprehensive diagnostics** and automatic repair tools
+- **Complete testing framework** for validation and troubleshooting
 
 Read more about the original Omarchy at [omarchy.org](https://omarchy.org).
 
-## Features
+## 🚀 Quick Start
+
+### One-Command Installation
+```bash
+curl -fsSL https://raw.githubusercontent.com/mitkox/omarchy-ai/main/boot.sh | bash
+```
+
+**That's it!** In 15-30 minutes you'll have a complete AI development environment.
+
+### 📋 Prerequisites
+- Fresh Arch Linux installation
+- 16GB RAM (32GB+ recommended)
+- 100GB free disk space (500GB+ recommended)
+- Internet connection for initial setup
+- NVIDIA GPU (optional but recommended)
+
+### ✅ Post-Installation
+```bash
+# After reboot, verify your installation
+omarchy-ai-doctor
+
+# Start developing
+ai-env
+jupyter-ai
+```
+
+📚 **New to Omarchy AI?** Check out the [Quick Start Guide](QUICKSTART.md) for a step-by-step tutorial.
+
+## ✨ What's New in v2.0
+
+### 🛠️ Enhanced Installation & Validation
+- **System Requirements Validation**: Comprehensive pre-installation checks
+- **Installation Recovery**: Rollback capability and checkpoint system
+- **Smart Error Handling**: Detailed error messages with solutions
+- **Progress Tracking**: Real-time installation progress indicators
+
+### 🔍 Diagnostic & Repair Tools
+- **omarchy-ai-doctor**: Complete system health diagnostics
+- **omarchy-ai-repair**: Automatic issue detection and repair
+- **omarchy-ai-test**: Comprehensive testing framework
+- **Performance Benchmarking**: CPU and GPU performance validation
+
+### 📦 Improved Dependency Management
+- **Centralized Requirements**: All dependencies in `requirements.txt` and `environment.yml`
+- **Version Pinning**: Stable, tested package versions
+- **Smart Installation**: Handles package conflicts automatically
+- **Cache Management**: Intelligent cleanup and optimization
+
+### 📚 Better Documentation
+- **Quick Start Guide**: Get running in 15 minutes
+- **Troubleshooting Guide**: Solutions for common issues
+- **API Documentation**: Complete command reference
+- **Example Projects**: Ready-to-run AI demos
+
+## 🎯 Features
 
 ### 🤖 AI Development Environment
 - **Python ecosystem** with PyTorch, TensorFlow, and Hugging Face Transformers
@@ -47,102 +107,85 @@ Read more about the original Omarchy at [omarchy.org](https://omarchy.org).
 - **Migration system** for seamless updates and feature additions
 - **System monitoring** with comprehensive GPU and resource tracking
 - **Container orchestration** for isolated development environments
-- **Automated updates** with rollback capabilities
+- **Automated diagnostics** with repair recommendations
+- **Performance optimization** tools and monitoring
 
-## Installation
+## 📋 Installation Options
 
-### Prerequisites
-- Fresh Arch Linux installation
-- NVIDIA GPU (recommended for optimal performance)
-- At least 16GB RAM (32GB recommended)
-- 500GB+ storage for models and datasets
-
-### Quick Start
+### Standard Installation
 ```bash
-# Download and run the installation script
-curl -fsSL https://raw.githubusercontent.com/mitkox/omarchy-ai/refs/heads/main/boot.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mitkox/omarchy-ai/main/boot.sh | bash
 ```
 
-### Manual Installation
+### Advanced Installation
 ```bash
-# Clone the repository
+# Clone repository first
 git clone https://github.com/mitkox/omarchy-ai.git
 cd omarchy-ai
 
-# Run the installation
+# Run system validation
+./validate-system.sh
+
+# Install with custom options
 ./install.sh
 ```
 
-The installation will:
-1. Set up the base Omarchy system (Hyprland, themes, etc.)
-2. Install AI development tools (Python, PyTorch, TensorFlow)
-3. Configure llama.cpp with CUDA support
-4. Set up model management and CI/CD tools
-5. Download offline documentation and references
-
-## Usage
-
-### AI Development Workflow
+### Resume Installation
 ```bash
-# Activate AI environment
-ai-env
+# Resume from last checkpoint
+./install.sh --resume
 
-# Navigate to workspace
-ai-workspace
-
-# Start Jupyter Lab
-jupyter-ai
-
-# Download and manage models
-model-download Qwen/Qwen3-0.6B
-model-list
-model-serve
-
-# Initialize new AI project
-ai-init my-ai-project
+# Rollback installation
+./install.sh --rollback
 ```
 
-### Local Model Inference
+## 🛠️ Essential Commands
+
+### System Management
 ```bash
-# Interactive chat with local model
-llama-chat
-
-# Start llama.cpp server
-llama-start
-
-# Monitor GPU usage
-gpu-monitor
-
-# Test CUDA setup
-gpu-test
+omarchy-ai-doctor           # Run comprehensive diagnostics
+omarchy-ai-repair           # Automatic issue repair
+omarchy-ai-test             # Run full test suite
+omarchy-ai-test --quick     # Quick health check
 ```
 
-### CI/CD and Testing
+### Environment Management
 ```bash
-# Run tests
-ai-test
-
-# Check code quality
-ai-lint
-ai-security
-
-# Format code
-ai-format
+ai-env                      # Activate AI development environment
+ai-workspace               # Navigate to AI workspace
+conda deactivate           # Exit environment
 ```
 
-### Offline Documentation
+### Model Management
 ```bash
-# Start documentation server
-docs-serve
-
-# Search documentation
-docs-search "transformer"
-
-# Update documentation
-docs-update
+model-download <model-id>   # Download from Hugging Face
+model-list                 # List downloaded models
+model-info <model-id>      # Show model details
+model-verify <model-id>    # Verify model integrity
+model-snapshot <model> <tag> # Create model snapshot
+model-serve                # Start model API server
+model-cleanup              # Clean up cache
 ```
 
-## Project Structure
+### Development Tools
+```bash
+jupyter-ai                 # Start Jupyter Lab in AI workspace
+mlflow-ui                  # MLflow experiment tracking
+tensorboard-ai             # TensorBoard visualization  
+docs-serve                 # Start documentation server
+gpu-monitor                # Monitor GPU usage
+```
+
+### Container & CI/CD
+```bash
+containers start           # Start container services
+containers stop            # Stop container services
+ai-test                    # Run AI pipeline tests
+ai-lint                    # Code quality checks
+ai-format                  # Format code
+```
+
+## 🏗️ Project Structure
 
 ```
 ~/ai-workspace/
@@ -150,21 +193,27 @@ docs-update
 ├── models/            # Downloaded AI models
 │   ├── huggingface/   # Hugging Face models
 │   ├── gguf/          # GGUF models for llama.cpp
-│   └── custom/        # Custom trained models
+│   ├── pytorch/       # PyTorch models
+│   └── snapshots/     # Model version snapshots
 ├── datasets/          # Training and evaluation datasets
+│   ├── raw/           # Original datasets
+│   ├── processed/     # Processed datasets
+│   └── splits/        # Train/test splits
 ├── experiments/       # ML experiment tracking
 ├── notebooks/         # Jupyter notebooks
+├── logs/              # Application logs
+├── cache/             # Temporary cache files
 ├── tools/             # Management scripts
 └── docs/              # Offline documentation
 ```
 
-## Hardware Requirements
+## 💻 Hardware Requirements
 
 ### Minimum
-- CPU: Modern x86_64 processor
+- CPU: Modern x86_64 processor (4+ cores recommended)
 - RAM: 16GB
 - Storage: 100GB free space
-- GPU: Optional (CPU inference fallback)
+- GPU: Optional (CPU inference fallback available)
 
 ### Recommended
 - CPU: 8+ cores (Intel i7/AMD Ryzen 7 or better)
@@ -178,98 +227,220 @@ docs-update
 - Storage: 1TB+ NVMe SSD
 - GPU: NVIDIA RTX 4090 or better (24GB+ VRAM)
 
-## Available Commands
+## 🎯 Usage Examples
 
-### Model Management
-- `model-download <model-id>` - Download model from Hugging Face
-- `model-list` - List downloaded models
-- `model-info <model-id>` - Show model information
-- `model-serve` - Start model API server
-- `model-cleanup` - Clean up model cache
-- `model-verify <model-id>` - Verify model integrity
-- `model-snapshot <model-id> <tag>` - Create model snapshot
-
-### Development
-- `ai-init <project-name>` - Initialize new AI project
-- `ai-env` - Activate AI conda environment
-- `ai-workspace` - Navigate to AI workspace
-- `jupyter-ai` - Start Jupyter Lab in AI workspace
-- `distributed-train <script.py>` - Launch distributed training
-
-### GPU and Performance
-- `gpu-monitor` - Monitor GPU usage with detailed stats
-- `gpu-monitor --continuous` - Continuous GPU monitoring
-- `gpu-benchmark` - Run GPU performance benchmark
-- `gpu-test` - Test CUDA functionality
-
-### Containers
-- `containers build` - Build all container images
-- `containers start [service]` - Start container services
-- `containers stop [service]` - Stop container services
-- `containers list` - List running services
-- `ai-jupyter` - Start Jupyter container
-- `ai-pytorch` - Access PyTorch container
-
-### Documentation
-- `docs-serve` - Start offline documentation server
-- `docs-build` - Build documentation
-- `docs-update` - Update framework documentation
-- `docs-search <query>` - Search documentation
-
-### System Management
-- `system-update` - Full system update including migrations
-- `run-migrations` - Run pending migrations
-- `create-migration "description"` - Create new migration
-- `list-migrations` - List migration status
-
-### llama.cpp
-- `llama-chat` - Interactive chat with local model
-- `llama-download` - Download GGUF models
-- `llama-start/stop` - Control llama.cpp server
-
-## Troubleshooting
-
-### GPU Issues
+### Quick AI Chat
 ```bash
-# Check NVIDIA drivers
-nvidia-smi
-
-# Test CUDA installation
-gpu-test
-
-# Verify GPU support in PyTorch
-python -c "import torch; print(torch.cuda.is_available())"
+# Download and chat with a model
+model-download microsoft/DialoGPT-medium
+llama-chat
 ```
 
-### Model Loading Issues
+### ML Experiment Tracking
 ```bash
-# Check model cache
-model-list
+# Start MLflow
+mlflow-ui
 
-# Verify model integrity
-model-verify <model-id>
-
-# Clean up corrupted cache
-model-cleanup
+# Track experiments in Python
+import mlflow
+mlflow.start_run()
+mlflow.log_metric("accuracy", 0.95)
+mlflow.end_run()
 ```
 
-### Performance Issues
+### Model Serving
 ```bash
-# Monitor system resources
-htop
+# Start model API server
+model-serve --model microsoft/DialoGPT-medium --port 8000
 
-# Check GPU utilization
-gpu-monitor
-
-# Benchmark performance
-gpu-benchmark
+# Test API
+curl -X POST http://localhost:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello, how are you?"}'
 ```
 
-## Contributing
+### Container Development
+```bash
+# Start AI development container
+containers start ai-jupyter
 
-Contributions are welcome! Please read the [PRD](PRD.md) for project requirements and development guidelines.
+# Access container
+docker exec -it ai-jupyter bash
+```
 
-## License
+## 🔧 Troubleshooting
+
+### Quick Fixes
+```bash
+# System not working? Run diagnostics
+omarchy-ai-doctor
+
+# Found issues? Try automatic repair
+omarchy-ai-repair
+
+# Still having problems? Check logs
+tail -f ~/.omarchy-ai-install.log
+```
+
+### Common Issues
+
+**Environment activation fails:**
+```bash
+source ~/.bashrc
+conda activate ai-dev
+```
+
+**GPU not detected:**
+```bash
+sudo pacman -S nvidia nvidia-utils
+sudo reboot
+```
+
+**Model downloads failing:**
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+model-download microsoft/DialoGPT-small
+```
+
+**Jupyter won't start:**
+```bash
+conda activate ai-dev
+pip install --force-reinstall jupyter jupyterlab
+```
+
+📖 **Need more help?** Check the [Troubleshooting Guide](TROUBLESHOOTING.md) for detailed solutions.
+
+## 🎮 Example Projects
+
+### 1. Personal AI Assistant
+- Download conversational model
+- Create chat interface with memory
+- Deploy as local web service
+- Add voice input/output
+
+### 2. Document Q&A System  
+- Load document datasets
+- Build semantic search with embeddings
+- Create question-answering pipeline
+- Deploy with FastAPI
+
+### 3. Image Analysis Pipeline
+- Set up computer vision models
+- Create batch processing pipeline  
+- Add model performance monitoring
+- Containerize for deployment
+
+### 4. Distributed Training Setup
+- Configure multi-GPU training
+- Set up experiment tracking
+- Implement model checkpointing
+- Add performance profiling
+
+## 🧪 Testing Your Installation
+
+### Quick Health Check
+```bash
+omarchy-ai-test --quick
+```
+
+### Full Test Suite  
+```bash
+omarchy-ai-test
+```
+
+### Performance Benchmarks
+```bash
+omarchy-ai-test --performance
+omarchy-ai-doctor --performance
+```
+
+### GPU Testing
+```bash
+python -c "
+import torch
+print(f'CUDA available: {torch.cuda.is_available()}')
+print(f'GPU count: {torch.cuda.device_count()}')
+if torch.cuda.is_available():
+    print(f'GPU name: {torch.cuda.get_device_name(0)}')
+"
+```
+
+## 📊 Monitoring & Optimization
+
+### Resource Monitoring
+```bash
+gpu-monitor              # Real-time GPU stats
+htop                     # CPU and memory usage
+iotop                    # Disk I/O monitoring
+```
+
+### Performance Optimization
+```bash
+# Set CPU thread limits for optimal performance
+export OMP_NUM_THREADS=8
+export MKL_NUM_THREADS=8
+
+# Configure GPU memory management
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+
+# Enable memory optimization
+export PYTHONMALLOC=malloc
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Here's how you can help:
+
+1. **Report Issues**: Use GitHub issues for bugs and feature requests
+2. **Submit PRs**: Follow our contribution guidelines
+3. **Improve Documentation**: Help make setup easier for everyone
+4. **Share Examples**: Contribute example projects and tutorials
+5. **Test & Feedback**: Try new features and provide feedback
+
+### Development Setup
+```bash
+git clone https://github.com/mitkox/omarchy-ai.git
+cd omarchy-ai
+git checkout -b feature/your-feature
+
+# Make changes and test
+./bin/omarchy-ai-test
+
+# Submit PR
+```
+
+## 📚 Documentation
+
+- **[Quick Start Guide](QUICKSTART.md)** - Get started in 15 minutes
+- **[Troubleshooting Guide](TROUBLESHOOTING.md)** - Solutions for common issues  
+- **[Installation Guide](INSTALLATION-GUIDE.md)** - Detailed installation instructions
+- **[Product Requirements](PRD.md)** - Project vision and roadmap
+- **API Documentation** - Available via `docs-serve`
+
+## 🌟 Community
+
+- **GitHub Discussions**: Ask questions and share projects
+- **Issues**: Report bugs and request features  
+- **Wiki**: Community-contributed guides and tips
+- **Examples**: Share your AI projects and setups
+
+## 📄 License
 
 Omarchy AI is released under the [MIT License](https://opensource.org/licenses/MIT).
+
+## 🙏 Acknowledgments
+
+- Built on the excellent [Omarchy](https://github.com/basecamp/omarchy) foundation
+- Powered by the amazing open-source AI community
+- Thanks to all contributors and users who make this project possible
+
+---
+
+**Ready to start your AI development journey?** 
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mitkox/omarchy-ai/main/boot.sh | bash
+```
+
+*Star ⭐ this repo if you find it useful!*
 

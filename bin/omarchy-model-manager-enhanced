@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+"""
+Enhanced Model Management CLI for Omarchy AI
+Provides comprehensive tools for downloading, versioning, and managing AI models
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import hashlib
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+from dataclasses import dataclass, asdict
+import yaml
+import requests
+from tqdm import tqdm
+from huggingface_hub import hf_hub_download, snapshot_download, list_repo_files
+import torch
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+@dataclass
+class ModelInfo:
+    """Enhanced model information structure"""
+    model_id: str
+    source: str
+    path: str
+    size: int
+    downloaded_at: str
+    version: str = "unknown"
+    revision: str = "main"
+    checksum: str = ""
+    tags: List[str] = None
+    description: str = ""
+    architecture: str = ""
+    parameters: int = 0
+    license: str = ""
+    use_cases: List[str] = None
+    performance_metrics: Dict = None
+    
+    def __post_init__(self):
+        if self.tags is None:
+            self.tags = []
+        if self.use_cases is None:
+            self.use_cases = []
+        if self.performance_metrics is None:
+            self.performance_metrics = {}
+
+class EnhancedModelManager:
+    def __init__(self, config_path: str = "~/.config/model-manager.yaml"):
+        self.config_path = Path(config_path).expanduser()
+        self.config = self.load_config()
+        self.model_registry = Path(self.config["model_registry"]["local_path"]).expanduser()
+        self.cache_path = Path(self.config["model_registry"]["cache_path"]).expanduser()
+        self.models_path = Path(self.config["storage"]["backends"][0]["path"]).expanduser()
+        
+        # Create directories if they don't exist
+        self.model_registry.mkdir(parents=True, exist_ok=True)
+        self.cache_path.mkdir(parents=True, exist_ok=True)
+        self.models_path.mkdir(parents=True, exist_ok=True)
+        
+        # Set up tools directory for additional scripts
+        self.tools_dir = Path.home() / "ai-workspace" / "tools"
+        self.tools_dir.mkdir(parents=True, exist_ok=True)
+    
+    def load_config(self) -> Dict:
+        """Load configuration from YAML file with fallback defaults"""
+        default_config = {
+            "model_registry": {
+                "local_path": "~/ai-workspace/model-registry",
+                "cache_path": "~/ai-workspace/model-cache", 
+                "max_cache_size": "50GB"
+            },
+            "storage": {
+                "backends": [
+                    {
+                        "name": "local",
+                        "type": "filesystem",
+                        "path": "~/ai-workspace/models"
+                    }
+                ]
+            },
+            "model_categories": [],
+            "offline_mode": True,
+            "auto_cleanup": True,
+            "verify_checksums": True
+        }
+        
+        try:
+            if self.config_path.exists():
+                with open(self.config_path, 'r') as f:
+                    user_config = yaml.safe_load(f)
+                    # Merge with defaults
+                    default_config.update(user_config)
+            else:
+                # Create default config
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.config_path, 'w') as f:
+                    yaml.dump(default_config, f, default_flow_style=False)
+                logger.info(f"Created default config at {self.config_path}")
+                
+            return default_config
+        except Exception as e:
+            logger.error(f"Error loading config: {e}")
+            return default_config
+    
+    def calculate_checksum(self, file_path: Path) -> str:
+        """Calculate SHA256 checksum of a file"""
+        sha256_hash = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    sha256_hash.update(chunk)
+            return sha256_hash.hexdigest()
+        except Exception as e:
+            logger.error(f"Error calculating checksum for {file_path}: {e}")
+            return ""
+    
+    def get_directory_size(self, path: Path) -> int:
+        """Calculate directory size in bytes"""
+        total_size = 0
+        try:
+            for file_path in path.rglob("*"):
+                if file_path.is_file():
+                    total_size += file_path.stat().st_size
+        except Exception as e:
+            logger.error(f"Error calculating size for {path}: {e}")
+        return total_size
+    
+    def format_size(self, size: int) -> str:
+        """Format size in human readable format"""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size < 1024.0:
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} PB"
+    
+    def get_model_info(self, model_id: str) -> Optional[ModelInfo]:
+        """Get model information from registry"""
+        registry_file = self.model_registry / f"{model_id.replace('/', '_')}.json"
+        if registry_file.exists():
+            try:
+                with open(registry_file, 'r') as f:
+                    data = json.load(f)
+                    return ModelInfo(**data)
+            except Exception as e:
+                logger.error(f"Error loading model info for {model_id}: {e}")
+        return None
+    
+    def save_model_info(self, model_info: ModelInfo):
+        """Save model information to registry"""
+        registry_file = self.model_registry / f"{model_info.model_id.replace('/', '_')}.json"
+        try:
+            with open(registry_file, 'w') as f:
+                json.dump(asdict(model_info), f, indent=2, default=str)
+        except Exception as e:
+            logger.error(f"Error saving model info for {model_info.model_id}: {e}")
+    
+    def get_huggingface_model_info(self, model_id: str) -> Dict:
+        """Fetch model information from Hugging Face Hub API"""
+        try:
+            url = f"https://huggingface.co/api/models/{model_id}"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            logger.warning(f"Could not fetch HF model info for {model_id}: {e}")
+        return {}
+    
+    def download_huggingface_model(self, model_id: str, revision: str = "main", 
+                                 include_patterns: List[str] = None) -> Optional[str]:
+        """Download model from Hugging Face Hub with enhanced metadata"""
+        logger.info(f"Downloading {model_id} from Hugging Face Hub...")
+        
+        # Get model info from HF API
+        hf_info = self.get_huggingface_model_info(model_id)
+        
+        try:
+            model_path = self.models_path / "huggingface" / model_id
+            
+            # Download with progress bar
+            logger.info("Fetching model files...")
+            downloaded_path = snapshot_download(
+                repo_id=model_id,
+                revision=revision,
+                cache_dir=str(self.cache_path),
+                local_dir=str(model_path),
+                local_dir_use_symlinks=False,
+                allow_patterns=include_patterns
+            )
+            
+            # Calculate size and checksum for main model file
+            size = self.get_directory_size(Path(downloaded_path))
+            
+            # Find main model file for checksum
+            model_files = list(Path(downloaded_path).glob("*.bin")) + \
+                         list(Path(downloaded_path).glob("*.safetensors"))
+            checksum = ""
+            if model_files:
+                checksum = self.calculate_checksum(model_files[0])
+            
+            # Extract metadata from HF info
+            description = hf_info.get("description", "")
+            tags = hf_info.get("tags", [])
+            license_info = hf_info.get("license", "")
+            
+            # Try to determine architecture and parameters
+            architecture = ""
+            parameters = 0
+            if "config.json" in [f.name for f in Path(downloaded_path).iterdir()]:
+                try:
+                    with open(Path(downloaded_path) / "config.json") as f:
+                        config = json.load(f)
+                        architecture = config.get("architectures", ["Unknown"])[0]
+                        # Estimate parameters from config
+                        if "n_parameters" in config:
+                            parameters = config["n_parameters"]
+                        elif "hidden_size" in config and "num_hidden_layers" in config:
+                            # Rough estimate for transformer models
+                            hidden_size = config["hidden_size"]
+                            num_layers = config["num_hidden_layers"]
+                            vocab_size = config.get("vocab_size", 50000)
+                            parameters = (hidden_size * hidden_size * 4 * num_layers) + (vocab_size * hidden_size)
+                except Exception as e:
+                    logger.warning(f"Could not parse model config: {e}")
+            
+            # Create enhanced model info
+            model_info = ModelInfo(
+                model_id=model_id,
+                source="huggingface",
+                path=str(downloaded_path),
+                size=size,
+                downloaded_at=datetime.now().isoformat(),
+                revision=revision,
+                checksum=checksum,
+                tags=tags,
+                description=description,
+                architecture=architecture,
+                parameters=parameters,
+                license=license_info,
+                use_cases=self._extract_use_cases(tags, description)
+            )
+            
+            self.save_model_info(model_info)
+            
+            logger.info(f"✅ Model downloaded successfully!")
+            logger.info(f"   Path: {downloaded_path}")
+            logger.info(f"   Size: {self.format_size(size)}")
+            logger.info(f"   Architecture: {architecture}")
+            if parameters > 0:
+                logger.info(f"   Parameters: {parameters:,}")
+            
+            return str(downloaded_path)
+            
+        except Exception as e:
+            logger.error(f"❌ Error downloading model: {e}")
+            return None
+    
+    def _extract_use_cases(self, tags: List[str], description: str) -> List[str]:
+        """Extract use cases from tags and description"""
+        use_cases = []
+        
+        # Common task mappings
+        task_mapping = {
+            "text-generation": "Text Generation",
+            "text-classification": "Text Classification", 
+            "question-answering": "Question Answering",
+            "summarization": "Text Summarization",
+            "translation": "Machine Translation",
+            "conversational": "Chatbot/Conversation",
+            "image-classification": "Image Classification",
+            "object-detection": "Object Detection",
+            "speech-recognition": "Speech Recognition",
+            "text-to-speech": "Text-to-Speech"
+        }
+        
+        for tag in tags:
+            if tag in task_mapping:
+                use_cases.append(task_mapping[tag])
+        
+        # Extract from description using keywords
+        if description:
+            desc_lower = description.lower()
+            for keyword, use_case in task_mapping.items():
+                if keyword.replace("-", " ") in desc_lower and use_case not in use_cases:
+                    use_cases.append(use_case)
+        
+        return list(set(use_cases))  # Remove duplicates
+    
+    def verify_model_integrity(self, model_id: str) -> Tuple[bool, str]:
+        """Enhanced model integrity verification"""
+        model_info = self.get_model_info(model_id)
+        if not model_info:
+            return False, f"Model {model_id} not found in registry"
+        
+        model_path = Path(model_info.path)
+        if not model_path.exists():
+            return False, f"Model path not found: {model_path}"
+        
+        # Check file sizes
+        current_size = self.get_directory_size(model_path)
+        if abs(current_size - model_info.size) > (model_info.size * 0.01):  # 1% tolerance
+            return False, f"Size mismatch: expected {self.format_size(model_info.size)}, found {self.format_size(current_size)}"
+        
+        # Verify checksum if available
+        if model_info.checksum:
+            model_files = list(model_path.glob("*.bin")) + list(model_path.glob("*.safetensors"))
+            if model_files:
+                current_checksum = self.calculate_checksum(model_files[0])
+                if current_checksum != model_info.checksum:
+                    return False, "Checksum verification failed"
+        
+        # Try to load the model if it's a PyTorch model
+        if model_info.source == "huggingface":
+            try:
+                # Basic loading test
+                if (model_path / "pytorch_model.bin").exists():
+                    torch.load(model_path / "pytorch_model.bin", map_location="cpu")
+                elif (model_path / "model.safetensors").exists():
+                    # For safetensors, just check file integrity
+                    pass
+                return True, "Model verification successful"
+            except Exception as e:
+                return False, f"Model loading failed: {str(e)}"
+        
+        return True, "Basic verification passed"
+    
+    def create_model_snapshot(self, model_id: str, tag: str) -> bool:
+        """Create a snapshot/backup of a model"""
+        model_info = self.get_model_info(model_id)
+        if not model_info:
+            logger.error(f"Model {model_id} not found")
+            return False
+        
+        try:
+            source_path = Path(model_info.path)
+            snapshot_dir = self.models_path / "snapshots" / model_id.replace("/", "_")
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            
+            snapshot_path = snapshot_dir / f"{tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            shutil.copytree(source_path, snapshot_path)
+            
+            # Save snapshot info
+            snapshot_info = asdict(model_info)
+            snapshot_info["snapshot_tag"] = tag
+            snapshot_info["snapshot_created"] = datetime.now().isoformat()
+            
+            with open(snapshot_path / "snapshot_info.json", 'w') as f:
+                json.dump(snapshot_info, f, indent=2, default=str)
+            
+            logger.info(f"✅ Snapshot created: {snapshot_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating snapshot: {e}")
+            return False
+    
+    def list_models(self, filter_by: str = None) -> List[ModelInfo]:
+        """List all downloaded models with optional filtering"""
+        models = []
+        for registry_file in self.model_registry.glob("*.json"):
+            try:
+                model_info = self.get_model_info(registry_file.stem.replace("_", "/"))
+                if model_info:
+                    # Apply filter if specified
+                    if filter_by:
+                        if (filter_by.lower() in model_info.model_id.lower() or
+                            filter_by.lower() in model_info.description.lower() or
+                            any(filter_by.lower() in tag.lower() for tag in model_info.tags)):
+                            models.append(model_info)
+                    else:
+                        models.append(model_info)
+            except Exception as e:
+                logger.warning(f"Error loading model from {registry_file}: {e}")
+        
+        return sorted(models, key=lambda x: x.downloaded_at, reverse=True)
+    
+    def cleanup_cache(self) -> int:
+        """Enhanced cache cleanup with size reporting"""
+        if not self.cache_path.exists():
+            return 0
+        
+        cache_size = self.get_directory_size(self.cache_path)
+        max_size_str = self.config["model_registry"]["max_cache_size"]
+        
+        # Convert max_size to bytes
+        if max_size_str.endswith("GB"):
+            max_size_bytes = int(max_size_str[:-2]) * 1024 * 1024 * 1024
+        elif max_size_str.endswith("TB"):
+            max_size_bytes = int(max_size_str[:-2]) * 1024 * 1024 * 1024 * 1024
+        else:
+            max_size_bytes = int(max_size_str)
+        
+        if cache_size <= max_size_bytes:
+            logger.info(f"Cache size ({self.format_size(cache_size)}) is within limit ({max_size_str})")
+            return 0
+        
+        logger.info(f"Cache cleanup needed: {self.format_size(cache_size)} > {max_size_str}")
+        
+        # Get all cache files with modification times
+        cache_files = []
+        for root, dirs, files in os.walk(self.cache_path):
+            for file in files:
+                file_path = Path(root) / file
+                try:
+                    cache_files.append((file_path, file_path.stat().st_mtime, file_path.stat().st_size))
+                except:
+                    continue
+        
+        # Sort by modification time (oldest first)
+        cache_files.sort(key=lambda x: x[1])
+        
+        cleaned_size = 0
+        for file_path, _, file_size in cache_files:
+            try:
+                file_path.unlink()
+                cleaned_size += file_size
+                cache_size -= file_size
+                
+                if cache_size <= max_size_bytes:
+                    break
+            except Exception as e:
+                logger.warning(f"Could not remove {file_path}: {e}")
+        
+        logger.info(f"✅ Cache cleanup completed: {self.format_size(cleaned_size)} freed")
+        return cleaned_size
+
+def main():
+    parser = argparse.ArgumentParser(description="Enhanced AI Model Management CLI")
+    parser.add_argument("--version", action="version", version="Model Manager v2.0.0")
+    
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # Download command
+    download_parser = subparsers.add_parser("download", help="Download a model")
+    download_parser.add_argument("model_id", help="Model ID (e.g., microsoft/DialoGPT-medium)")
+    download_parser.add_argument("--revision", default="main", help="Model revision/branch")
+    download_parser.add_argument("--include", nargs="*", help="Include patterns for files")
+    
+    # List command
+    list_parser = subparsers.add_parser("list", help="List downloaded models")
+    list_parser.add_argument("--filter", help="Filter models by name, description, or tags")
+    list_parser.add_argument("--format", choices=["table", "json"], default="table", help="Output format")
+    
+    # Info command  
+    info_parser = subparsers.add_parser("info", help="Show detailed model information")
+    info_parser.add_argument("model_id", help="Model ID")
+    
+    # Verify command
+    verify_parser = subparsers.add_parser("verify", help="Verify model integrity")
+    verify_parser.add_argument("model_id", help="Model ID")
+    
+    # Snapshot command
+    snapshot_parser = subparsers.add_parser("snapshot", help="Create model snapshot")
+    snapshot_parser.add_argument("model_id", help="Model ID")
+    snapshot_parser.add_argument("tag", help="Snapshot tag/name")
+    
+    # Delete command
+    delete_parser = subparsers.add_parser("delete", help="Delete a model")
+    delete_parser.add_argument("model_id", help="Model ID")
+    delete_parser.add_argument("--force", action="store_true", help="Force deletion without confirmation")
+    
+    # Cleanup command
+    cleanup_parser = subparsers.add_parser("cleanup", help="Clean up model cache")
+    cleanup_parser.add_argument("--force", action="store_true", help="Force cleanup without confirmation")
+    
+    # Search command
+    search_parser = subparsers.add_parser("search", help="Search Hugging Face Hub")
+    search_parser.add_argument("query", help="Search query")
+    search_parser.add_argument("--limit", type=int, default=10, help="Maximum results")
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        return
+    
+    try:
+        manager = EnhancedModelManager()
+        
+        if args.command == "download":
+            result = manager.download_huggingface_model(
+                args.model_id, 
+                args.revision,
+                args.include
+            )
+            if not result:
+                sys.exit(1)
+        
+        elif args.command == "list":
+            models = manager.list_models(args.filter)
+            
+            if not models:
+                print("No models found")
+                return
+            
+            if args.format == "json":
+                print(json.dumps([asdict(m) for m in models], indent=2, default=str))
+            else:
+                # Table format
+                print(f"{'Model ID':<40} {'Size':<10} {'Architecture':<20} {'Downloaded':<20}")
+                print("-" * 95)
+                for model in models:
+                    size = manager.format_size(model.size)
+                    downloaded = model.downloaded_at[:19]
+                    arch = model.architecture[:18] if model.architecture else "Unknown"
+                    print(f"{model.model_id:<40} {size:<10} {arch:<20} {downloaded:<20}")
+        
+        elif args.command == "info":
+            model_info = manager.get_model_info(args.model_id)
+            if not model_info:
+                print(f"Model {args.model_id} not found")
+                sys.exit(1)
+            
+            # Pretty print model info
+            print(f"\n📋 Model Information: {model_info.model_id}")
+            print("=" * 60)
+            print(f"Source: {model_info.source}")
+            print(f"Path: {model_info.path}")
+            print(f"Size: {manager.format_size(model_info.size)}")
+            print(f"Downloaded: {model_info.downloaded_at}")
+            print(f"Architecture: {model_info.architecture or 'Unknown'}")
+            if model_info.parameters > 0:
+                print(f"Parameters: {model_info.parameters:,}")
+            if model_info.description:
+                print(f"Description: {model_info.description}")
+            if model_info.tags:
+                print(f"Tags: {', '.join(model_info.tags)}")
+            if model_info.use_cases:
+                print(f"Use Cases: {', '.join(model_info.use_cases)}")
+            if model_info.license:
+                print(f"License: {model_info.license}")
+        
+        elif args.command == "verify":
+            success, message = manager.verify_model_integrity(args.model_id)
+            print(f"{'✅' if success else '❌'} {message}")
+            if not success:
+                sys.exit(1)
+        
+        elif args.command == "snapshot":
+            success = manager.create_model_snapshot(args.model_id, args.tag)
+            if not success:
+                sys.exit(1)
+        
+        elif args.command == "delete":
+            model_info = manager.get_model_info(args.model_id)
+            if not model_info:
+                print(f"Model {args.model_id} not found")
+                sys.exit(1)
+            
+            if not args.force:
+                size = manager.format_size(model_info.size)
+                confirm = input(f"Delete {args.model_id} ({size})? [y/N]: ")
+                if confirm.lower() != 'y':
+                    print("Cancelled")
+                    return
+            
+            try:
+                # Remove files
+                model_path = Path(model_info.path)
+                if model_path.exists():
+                    shutil.rmtree(model_path)
+                
+                # Remove registry entry
+                registry_file = manager.model_registry / f"{args.model_id.replace('/', '_')}.json"
+                if registry_file.exists():
+                    registry_file.unlink()
+                
+                print(f"✅ Model {args.model_id} deleted successfully")
+                
+            except Exception as e:
+                print(f"❌ Error deleting model: {e}")
+                sys.exit(1)
+        
+        elif args.command == "cleanup":
+            if not args.force:
+                cache_size = manager.get_directory_size(manager.cache_path)
+                confirm = input(f"Clean up cache ({manager.format_size(cache_size)})? [y/N]: ")
+                if confirm.lower() != 'y':
+                    print("Cancelled")
+                    return
+            
+            cleaned = manager.cleanup_cache()
+            if cleaned > 0:
+                print(f"✅ Cleaned up {manager.format_size(cleaned)}")
+            else:
+                print("ℹ️  No cleanup needed")
+    
+    except KeyboardInterrupt:
+        print("\n⚠️  Operation cancelled by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

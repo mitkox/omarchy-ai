@@ -1,0 +1,697 @@
+#!/bin/bash
+# Omarchy AI Repair Tool - Automatic issue detection and repair
+
+set -euo pipefail
+
+# Configuration
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LOG_FILE="$HOME/.omarchy-ai-repair.log"
+readonly BACKUP_DIR="$HOME/.omarchy-ai-repair-backup"
+
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+# Repair counters
+REPAIRS_ATTEMPTED=0
+REPAIRS_SUCCESSFUL=0
+REPAIRS_FAILED=0
+
+# Logging functions
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE"
+}
+
+error() {
+    log "${RED}❌ ERROR: $*${NC}"
+}
+
+warning() {
+    log "${YELLOW}⚠️  WARNING: $*${NC}"
+}
+
+success() {
+    log "${GREEN}✅ SUCCESS: $*${NC}"
+}
+
+info() {
+    log "${BLUE}ℹ️  INFO: $*${NC}"
+}
+
+# Backup function
+create_backup() {
+    local file_or_dir="$1"
+    local backup_name="$2"
+    
+    if [[ -e "$file_or_dir" ]]; then
+        mkdir -p "$BACKUP_DIR"
+        cp -r "$file_or_dir" "$BACKUP_DIR/$backup_name.$(date +%Y%m%d_%H%M%S)"
+        info "Backup created: $backup_name"
+    fi
+}
+
+# Repair attempt wrapper
+attempt_repair() {
+    local repair_name="$1"
+    local repair_function="$2"
+    
+    info "Attempting repair: $repair_name"
+    ((REPAIRS_ATTEMPTED++))
+    
+    if $repair_function; then
+        success "Repair successful: $repair_name"
+        ((REPAIRS_SUCCESSFUL++))
+        return 0
+    else
+        error "Repair failed: $repair_name"
+        ((REPAIRS_FAILED++))
+        return 1
+    fi
+}
+
+# Repair functions
+repair_conda_environment() {
+    info "Checking conda environment..."
+    
+    # Check if conda is available
+    if ! command -v conda >/dev/null 2>&1; then
+        error "Conda not available - cannot repair environment"
+        return 1
+    fi
+    
+    # Check if ai-dev environment exists
+    if ! conda info --envs 2>/dev/null | grep -q "ai-dev"; then
+        warning "ai-dev environment missing - recreating..."
+        
+        if [[ -f "$HOME/.local/share/omarchy-ai/environment.yml" ]]; then
+            conda env create -f "$HOME/.local/share/omarchy-ai/environment.yml"
+            success "ai-dev environment recreated"
+        else
+            error "environment.yml not found - cannot recreate environment"
+            return 1
+        fi
+    else
+        info "ai-dev environment exists"
+    fi
+    
+    # Test environment functionality
+    if ! conda run -n ai-dev python --version >/dev/null 2>&1; then
+        warning "ai-dev environment not functional - attempting repair..."
+        
+        # Try to update environment
+        if [[ -f "$HOME/.local/share/omarchy-ai/environment.yml" ]]; then
+            conda env update -n ai-dev -f "$HOME/.local/share/omarchy-ai/environment.yml"
+            success "ai-dev environment updated"
+        else
+            error "Cannot update environment - environment.yml not found"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+repair_python_packages() {
+    info "Checking critical Python packages..."
+    
+    if ! command -v conda >/dev/null 2>&1; then
+        error "Conda not available"
+        return 1
+    fi
+    
+    local critical_packages=(
+        "torch"
+        "transformers" 
+        "numpy"
+        "pandas"
+        "matplotlib"
+        "jupyter"
+        "fastapi"
+    )
+    
+    local packages_to_install=()
+    
+    # Check which packages are missing
+    for package in "${critical_packages[@]}"; do
+        if ! conda run -n ai-dev python -c "import $package" >/dev/null 2>&1; then
+            packages_to_install+=("$package")
+        fi
+    done
+    
+    # Install missing packages
+    if [[ ${#packages_to_install[@]} -gt 0 ]]; then
+        warning "Missing packages detected: ${packages_to_install[*]}"
+        
+        for package in "${packages_to_install[@]}"; do
+            info "Installing $package..."
+            if conda run -n ai-dev pip install "$package"; then
+                success "Installed $package"
+            else
+                warning "Failed to install $package"
+            fi
+        done
+    else
+        success "All critical packages are available"
+    fi
+    
+    return 0
+}
+
+repair_ai_workspace() {
+    info "Checking AI workspace structure..."
+    
+    local workspace_dir="$HOME/ai-workspace"
+    local required_dirs=(
+        "projects"
+        "models"
+        "models/huggingface" 
+        "models/gguf"
+        "models/pytorch"
+        "datasets"
+        "datasets/raw"
+        "datasets/processed"
+        "experiments"
+        "notebooks"
+        "logs"
+        "mlruns"
+        "cache"
+        "tmp"
+    )
+    
+    # Create workspace directory if missing
+    if [[ ! -d "$workspace_dir" ]]; then
+        warning "AI workspace missing - creating..."
+        mkdir -p "$workspace_dir"
+        success "AI workspace created"
+    fi
+    
+    # Create required subdirectories
+    for dir in "${required_dirs[@]}"; do
+        local full_path="$workspace_dir/$dir"
+        if [[ ! -d "$full_path" ]]; then
+            warning "Directory missing: $dir - creating..."
+            mkdir -p "$full_path"
+        fi
+    done
+    
+    # Create or repair .env file
+    local env_file="$workspace_dir/.env"
+    if [[ ! -f "$env_file" ]] || [[ ! -s "$env_file" ]]; then
+        warning ".env file missing or empty - creating..."
+        
+        create_backup "$env_file" "workspace_env"
+        
+        cat > "$env_file" << 'EOF'
+# AI Development Environment Variables - Omarchy AI
+
+# CUDA Configuration
+CUDA_VISIBLE_DEVICES=0
+PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+NVIDIA_VISIBLE_DEVICES=all
+
+# Python/ML Configuration  
+TOKENIZERS_PARALLELISM=false
+PYTHONPATH=/home/${USER}/ai-workspace/src:$PYTHONPATH
+PYTHONIOENCODING=utf-8
+PYTHONDONTWRITEBYTECODE=1
+
+# ML Operations
+WANDB_MODE=offline
+MLFLOW_TRACKING_URI=file:///home/${USER}/ai-workspace/mlruns
+DVC_CONFIG_DIR=/home/${USER}/ai-workspace/.dvc
+
+# Model and Data Paths
+HF_HOME=/home/${USER}/ai-workspace/models/huggingface
+TRANSFORMERS_CACHE=/home/${USER}/ai-workspace/models/transformers
+TORCH_HOME=/home/${USER}/ai-workspace/models/torch
+DIFFUSERS_CACHE=/home/${USER}/ai-workspace/models/diffusers
+
+# Jupyter Configuration
+JUPYTER_CONFIG_DIR=/home/${USER}/ai-workspace/.jupyter
+JUPYTER_DATA_DIR=/home/${USER}/ai-workspace/.jupyter/data
+
+# Performance Tuning
+OMP_NUM_THREADS=4
+MKL_NUM_THREADS=4
+NUMBA_NUM_THREADS=4
+
+# Security
+HUGGINGFACE_HUB_DISABLE_TELEMETRY=1
+DISABLE_TELEMETRY=1
+EOF
+        
+        success ".env file created"
+    fi
+    
+    # Set proper permissions
+    chmod 755 "$workspace_dir"
+    chmod 644 "$env_file" 2>/dev/null || true
+    
+    return 0
+}
+
+repair_shell_aliases() {
+    info "Checking shell aliases..."
+    
+    local bashrc="$HOME/.bashrc"
+    local ai_aliases_marker="# AI Development Aliases - Omarchy AI"
+    
+    # Check if aliases are present
+    if ! grep -q "$ai_aliases_marker" "$bashrc" 2>/dev/null; then
+        warning "AI aliases missing - adding..."
+        
+        create_backup "$bashrc" "bashrc"
+        
+        cat >> "$bashrc" << 'EOF'
+
+# AI Development Aliases - Omarchy AI
+# Robust AI environment activation that handles various scenarios
+ai-env() {
+    # Set OpenSSL workaround
+    export CRYPTOGRAPHY_OPENSSL_NO_LEGACY=1
+    
+    # Find and source conda
+    conda_script=""
+    if [ -f /opt/miniconda3/etc/profile.d/conda.sh ]; then
+        conda_script="/opt/miniconda3/etc/profile.d/conda.sh"
+    elif [ -f /usr/share/miniconda3/etc/profile.d/conda.sh ]; then
+        conda_script="/usr/share/miniconda3/etc/profile.d/conda.sh"
+    elif command -v conda >/dev/null 2>&1; then
+        conda_base=$(conda info --base 2>/dev/null)
+        if [ -n "$conda_base" ] && [ -f "$conda_base/etc/profile.d/conda.sh" ]; then
+            conda_script="$conda_base/etc/profile.d/conda.sh"
+        fi
+    fi
+    
+    if [ -n "$conda_script" ]; then
+        source "$conda_script"
+        if conda activate ai-dev 2>/dev/null; then
+            echo "✅ AI development environment activated!"
+            echo "🐍 Python: $(python --version 2>/dev/null || echo 'Not available')"
+            echo "📦 Conda env: $(conda info --envs | grep '*' | awk '{print $1}' 2>/dev/null || echo 'Unknown')"
+        else
+            echo "❌ Failed to activate ai-dev environment"
+            echo "💡 Try: conda create -n ai-dev python=3.11 -y"
+        fi
+    else
+        echo "❌ Conda not found. Please install miniconda3 first."
+    fi
+}
+
+# Other AI development aliases
+alias ai-workspace='cd ~/ai-workspace'
+alias jupyter-ai='cd ~/ai-workspace && jupyter lab'
+alias mlflow-ui='mlflow ui --backend-store-uri file:///home/${USER}/ai-workspace/mlruns'
+alias tensorboard-ai='tensorboard --logdir ~/ai-workspace/logs'
+
+# Model Management Aliases
+alias model-download='python ~/ai-workspace/tools/model-manager.py download'
+alias model-list='python ~/ai-workspace/tools/model-manager.py list'
+alias model-info='python ~/ai-workspace/tools/model-manager.py info'
+alias model-delete='python ~/ai-workspace/tools/model-manager.py delete'
+alias model-verify='python ~/ai-workspace/tools/model-manager.py verify'
+alias model-cleanup='python ~/ai-workspace/tools/model-manager.py cleanup'
+alias model-serve='python ~/ai-workspace/tools/model-server.py'
+
+# GPU monitoring
+alias gpu-monitor='~/ai-workspace/bin/omarchy-gpu-monitor'
+alias gpu-test='nvidia-smi'
+
+# Diagnostics
+alias omarchy-ai-doctor='~/.local/share/omarchy-ai/bin/omarchy-ai-doctor'
+alias omarchy-ai-repair='~/.local/share/omarchy-ai/bin/omarchy-ai-repair'
+
+# End AI Development Aliases
+EOF
+        
+        success "AI aliases added to .bashrc"
+    else
+        success "AI aliases found in .bashrc"
+    fi
+    
+    return 0
+}
+
+repair_jupyter_config() {
+    info "Checking Jupyter configuration..."
+    
+    local jupyter_dir="$HOME/ai-workspace/.jupyter"
+    
+    if ! command -v conda >/dev/null 2>&1; then
+        error "Conda not available - cannot configure Jupyter"
+        return 1
+    fi
+    
+    # Create Jupyter config directory
+    if [[ ! -d "$jupyter_dir" ]]; then
+        warning "Jupyter config directory missing - creating..."
+        mkdir -p "$jupyter_dir"
+    fi
+    
+    # Generate Jupyter config
+    local jupyter_config="$jupyter_dir/jupyter_lab_config.py"
+    if [[ ! -f "$jupyter_config" ]]; then
+        warning "Jupyter config missing - creating..."
+        
+        cat > "$jupyter_config" << 'EOF'
+# Jupyter Lab configuration for Omarchy AI
+
+c = get_config()
+
+# Server settings
+c.ServerApp.ip = '127.0.0.1'
+c.ServerApp.port = 8888
+c.ServerApp.open_browser = True
+c.ServerApp.root_dir = '/home/${USER}/ai-workspace'
+
+# Security settings
+c.ServerApp.token = ''
+c.ServerApp.password = ''
+c.ServerApp.allow_root = False
+
+# Performance settings
+c.ResourceUseDisplay.track_cpu_percent = True
+c.ResourceUseDisplay.mem_limit = 0
+
+# Extension settings
+c.LabApp.extension_manager = 'pypi'
+EOF
+        
+        success "Jupyter config created"
+    fi
+    
+    # Test Jupyter installation
+    if conda run -n ai-dev jupyter lab --version >/dev/null 2>&1; then
+        success "Jupyter Lab is functional"
+    else
+        warning "Jupyter Lab not working - attempting reinstallation..."
+        conda run -n ai-dev pip install jupyterlab jupyterlab-git
+    fi
+    
+    return 0
+}
+
+repair_cuda_support() {
+    info "Checking CUDA support..."
+    
+    # Skip if no NVIDIA GPU
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        info "No NVIDIA GPU detected - skipping CUDA repair"
+        return 0
+    fi
+    
+    # Check CUDA toolkit
+    if ! command -v nvcc >/dev/null 2>&1; then
+        warning "CUDA toolkit not found - installing..."
+        
+        if command -v yay >/dev/null 2>&1; then
+            yay -S --noconfirm cuda-toolkit
+            success "CUDA toolkit installed"
+        else
+            error "Cannot install CUDA toolkit - yay not available"
+            return 1
+        fi
+    fi
+    
+    # Check PyTorch CUDA support
+    if command -v conda >/dev/null 2>&1; then
+        local cuda_available
+        cuda_available=$(conda run -n ai-dev python -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "error")
+        
+        if [[ "$cuda_available" == "False" ]] || [[ "$cuda_available" == "error" ]]; then
+            warning "PyTorch CUDA support not working - reinstalling PyTorch..."
+            
+            # Reinstall PyTorch with CUDA
+            conda run -n ai-dev pip uninstall torch torchvision torchaudio -y
+            conda run -n ai-dev pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+            
+            # Test again
+            cuda_available=$(conda run -n ai-dev python -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "error")
+            if [[ "$cuda_available" == "True" ]]; then
+                success "PyTorch CUDA support restored"
+            else
+                error "PyTorch CUDA support still not working"
+                return 1
+            fi
+        else
+            success "PyTorch CUDA support is working"
+        fi
+    fi
+    
+    return 0
+}
+
+repair_permissions() {
+    info "Checking file permissions..."
+    
+    # Fix AI workspace permissions
+    if [[ -d ~/ai-workspace ]]; then
+        chmod -R u+rwX ~/ai-workspace
+        success "AI workspace permissions fixed"
+    fi
+    
+    # Fix script permissions
+    local script_dirs=(
+        "$HOME/.local/share/omarchy-ai/bin"
+        "$HOME/.local/share/omarchy-ai/install"
+    )
+    
+    for script_dir in "${script_dirs[@]}"; do
+        if [[ -d "$script_dir" ]]; then
+            find "$script_dir" -name "*.sh" -exec chmod +x {} \;
+            find "$script_dir" -name "omarchy-*" -exec chmod +x {} \;
+            success "Script permissions fixed: $script_dir"
+        fi
+    done
+    
+    return 0
+}
+
+repair_system_packages() {
+    info "Checking system packages..."
+    
+    if ! command -v yay >/dev/null 2>&1; then
+        error "yay not available - cannot install system packages"
+        return 1
+    fi
+    
+    local critical_packages=(
+        "python"
+        "python-pip"
+        "git"
+        "curl"
+        "wget"
+        "base-devel"
+    )
+    
+    local packages_to_install=()
+    
+    # Check which packages are missing
+    for package in "${critical_packages[@]}"; do
+        if ! pacman -Qi "$package" >/dev/null 2>&1; then
+            packages_to_install+=("$package")
+        fi
+    done
+    
+    # Install missing packages
+    if [[ ${#packages_to_install[@]} -gt 0 ]]; then
+        warning "Missing system packages: ${packages_to_install[*]}"
+        
+        if yay -S --noconfirm "${packages_to_install[@]}"; then
+            success "System packages installed"
+        else
+            error "Failed to install system packages"
+            return 1
+        fi
+    else
+        success "All critical system packages are installed"
+    fi
+    
+    return 0
+}
+
+# Clean up temporary files and caches
+cleanup_system() {
+    info "Cleaning up system..."
+    
+    # Clean conda cache
+    if command -v conda >/dev/null 2>&1; then
+        conda clean --all -y >/dev/null 2>&1 || true
+        success "Conda cache cleaned"
+    fi
+    
+    # Clean pip cache
+    if command -v pip >/dev/null 2>&1; then
+        pip cache purge >/dev/null 2>&1 || true
+        success "Pip cache cleaned"
+    fi
+    
+    # Clean AI workspace tmp
+    if [[ -d ~/ai-workspace/tmp ]]; then
+        find ~/ai-workspace/tmp -type f -mtime +7 -delete 2>/dev/null || true
+        success "AI workspace temporary files cleaned"
+    fi
+    
+    # Clean old log files
+    find "$HOME" -name ".omarchy-ai-*.log" -mtime +30 -delete 2>/dev/null || true
+    
+    return 0
+}
+
+# Main repair function
+run_repairs() {
+    info "Starting Omarchy AI repair process..."
+    info "Log file: $LOG_FILE"
+    
+    # Initialize log
+    echo "Omarchy AI Repair - $(date)" > "$LOG_FILE"
+    
+    # Reset counters
+    REPAIRS_ATTEMPTED=0
+    REPAIRS_SUCCESSFUL=0
+    REPAIRS_FAILED=0
+    
+    # Create backup directory
+    mkdir -p "$BACKUP_DIR"
+    
+    # Run repair functions
+    local repair_functions=(
+        "repair_ai_workspace"
+        "repair_shell_aliases"
+        "repair_system_packages"
+        "repair_conda_environment"
+        "repair_python_packages"
+        "repair_jupyter_config"
+        "repair_cuda_support"
+        "repair_permissions"
+        "cleanup_system"
+    )
+    
+    for repair_func in "${repair_functions[@]}"; do
+        echo ""
+        attempt_repair "${repair_func#repair_}" "$repair_func"
+    done
+    
+    # Show summary
+    echo ""
+    echo "================================"
+    info "Repair process completed"
+    echo "Summary: $REPAIRS_ATTEMPTED attempted, $REPAIRS_SUCCESSFUL successful, $REPAIRS_FAILED failed"
+    
+    if [[ $REPAIRS_FAILED -eq 0 ]]; then
+        success "All repairs completed successfully!"
+        echo "Run 'omarchy-ai-doctor' to verify the fixes"
+    else
+        warning "Some repairs failed"
+        echo "Check the log file for details: $LOG_FILE"
+        echo "You may need to address some issues manually"
+    fi
+    
+    if [[ $REPAIRS_SUCCESSFUL -gt 0 ]]; then
+        echo ""
+        warning "Some changes were made. You may need to:"
+        echo "1. Restart your terminal session"
+        echo "2. Reload your shell: source ~/.bashrc"
+        echo "3. Reactivate conda: source ~/.local/share/omarchy-ai/activate-ai-env.sh"
+    fi
+    
+    return $REPAIRS_FAILED
+}
+
+# Emergency recovery function
+emergency_recovery() {
+    warning "Starting emergency recovery mode..."
+    
+    # Try to restore from backups
+    if [[ -d "$BACKUP_DIR" ]]; then
+        info "Backup directory found, restoring critical files..."
+        
+        # Find most recent backups
+        local bashrc_backup
+        bashrc_backup=$(find "$BACKUP_DIR" -name "bashrc.*" -type f | sort -r | head -1)
+        
+        if [[ -n "$bashrc_backup" && -f "$bashrc_backup" ]]; then
+            cp "$bashrc_backup" "$HOME/.bashrc"
+            success "Bashrc restored from backup"
+        fi
+    fi
+    
+    # Reset conda environment
+    if command -v conda >/dev/null 2>&1; then
+        if conda info --envs | grep -q "ai-dev"; then
+            warning "Removing potentially corrupted ai-dev environment..."
+            conda env remove -n ai-dev -y
+        fi
+        
+        # Recreate basic environment
+        conda create -n ai-dev python=3.11 -y
+        conda run -n ai-dev pip install torch transformers numpy pandas jupyter
+        success "Basic ai-dev environment recreated"
+    fi
+    
+    success "Emergency recovery completed"
+    echo "Run the full installation again: ~/.local/share/omarchy-ai/install.sh"
+}
+
+# Show help
+show_help() {
+    cat << EOF
+Omarchy AI Repair Tool - Automatic Issue Detection and Repair
+
+USAGE:
+    $0 [OPTIONS]
+
+OPTIONS:
+    --help         Show this help message
+    --emergency    Run emergency recovery mode
+    --dry-run      Show what would be repaired without making changes
+    --backup       Create backup of current configuration before repairs
+
+EXAMPLES:
+    $0                # Run standard repairs
+    $0 --emergency    # Emergency recovery mode
+    $0 --dry-run      # Preview repairs
+
+FILES:
+    ~/.omarchy-ai-repair.log            # Repair log
+    ~/.omarchy-ai-repair-backup/        # Configuration backups
+
+This tool attempts to automatically fix common Omarchy AI issues:
+- Missing conda environment
+- Broken Python packages
+- Missing AI workspace directories
+- Incorrect file permissions
+- Missing shell aliases
+- CUDA configuration issues
+
+Run this tool when 'omarchy-ai-doctor' reports issues.
+
+EOF
+}
+
+# Parse command line arguments
+case "${1:-}" in
+    --help|-h)
+        show_help
+        exit 0
+        ;;
+    --emergency)
+        emergency_recovery
+        ;;
+    --dry-run)
+        echo "Dry run mode not implemented yet"
+        exit 1
+        ;;
+    --backup)
+        mkdir -p "$BACKUP_DIR"
+        create_backup "$HOME/.bashrc" "bashrc"
+        create_backup "$HOME/ai-workspace/.env" "workspace_env"
+        success "Backups created in $BACKUP_DIR"
+        ;;
+    *)
+        run_repairs "$@"
+        ;;
+esac

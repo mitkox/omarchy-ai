@@ -1,0 +1,122 @@
+name: ai-dev
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - huggingface
+  - defaults
+dependencies:
+  # Python
+  - python=3.11
+  
+  # Core Scientific Computing
+  - numpy>=1.24.0
+  - scipy>=1.11.0
+  - pandas>=2.1.0
+  - matplotlib>=3.7.0
+  - seaborn>=0.13.0
+  - plotly>=5.17.0
+  - scikit-learn>=1.3.0
+  
+  # PyTorch with CUDA (will fallback to CPU if CUDA not available)
+  - pytorch>=2.1.0
+  - torchvision>=0.16.0
+  - torchaudio>=2.1.0
+  - pytorch-cuda=12.1
+  
+  # Jupyter & Development
+  - jupyter>=1.0.0
+  - jupyterlab>=4.0.0
+  - ipython>=8.15.0
+  - notebook>=7.0.0
+  
+  # Development Tools
+  - git
+  - git-lfs
+  - curl
+  - wget
+  - sqlite
+  - nodejs
+  
+  # System Tools
+  - psutil>=5.9.0
+  - tqdm>=4.66.0
+  
+  # Package Management
+  - pip>=23.3.0
+  - setuptools>=68.0.0
+  - wheel>=0.41.0
+  
+  # Additional packages via pip
+  - pip:
+    # ML/AI Libraries
+    - transformers>=4.35.0
+    - datasets>=2.14.0
+    - tokenizers>=0.15.0
+    - accelerate>=0.24.0
+    - diffusers>=0.23.0
+    - sentence-transformers>=2.2.0
+    - huggingface-hub>=0.33.4
+    
+    # MLOps
+    - mlflow>=2.8.0
+    - tensorboard>=2.15.0
+    - wandb>=0.16.0
+    - dvc>=3.30.0
+    
+    # APIs & Serving
+    - fastapi>=0.104.0
+    - uvicorn>=0.24.0
+    - gradio>=4.0.0
+    - streamlit>=1.28.0
+    
+    # NLP
+    - langchain>=0.0.300
+    - langchain-community
+    - langchain-openai
+    - spacy>=3.7.0
+    - nltk>=3.8.0
+    
+    # Computer Vision
+    - opencv-python>=4.8.0
+    - pillow>=10.0.0
+    - albumentations>=1.3.0
+    
+    # Audio
+    - librosa>=0.10.0
+    - soundfile>=0.12.0
+    
+    # Development & Testing
+    - black>=23.9.0
+    - isort>=5.12.0
+    - flake8>=6.0.0
+    - mypy>=1.6.0
+    - pytest>=7.4.0
+    - pytest-cov>=4.1.0
+    - pytest-mock>=3.11.0
+    - pre-commit>=3.5.0
+    - ruff>=0.1.0
+    
+    # Utilities
+    - click>=8.2.1
+    - PyYAML>=6.0.2
+    - requests>=2.32.4
+    - GitPython>=3.1.44
+    - rich>=14.0.0
+    - pydantic>=2.4.0
+    - python-dotenv>=1.0.0
+    - aiofiles>=23.2.0
+    - aiohttp>=3.9.0
+    - boto3>=1.29.0
+    - minio>=7.1.0
+    - fsspec>=2023.9.0
+    
+    # Jupyter Extensions
+    - jupyterlab-git>=0.50.0
+    - nbconvert>=7.8.0
+    - nbformat>=5.9.0
+    
+    # Profiling & Debugging
+    - ipdb>=0.13.0
+    - line_profiler>=4.1.0
+    - memory_profiler>=0.61.0
